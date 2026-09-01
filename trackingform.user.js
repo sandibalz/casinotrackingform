@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Casino Google Form Input (Reliable + Lightweight)
 // @namespace    http://tampermonkey.net/
-// @version      1.58.4
+// @version      1.58.5
 // @description  Popup form to submit SC data to a Google Form; full per-site
 // @author       Grok / sandibalz
 // @run-at       document-start
