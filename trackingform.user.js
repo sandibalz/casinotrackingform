@@ -1,20 +1,13 @@
 // ==UserScript==
-// @name         Casino Tracking Form
-// @namespace    http://tampermonkey.net
-// @version      1.0.2
-// @description  Automatically updates across devices
-// @author       sandibalz
-// @match        https://*://*
+// @name         Casino Google Form Input (Reliable + Lightweight)
+// @namespace    http://tampermonkey.net/
+// @version      1.58.2
+// @description  Popup form to submit SC data to a Google Form; full per-site
+// @author       Grok / sandibalz
+// @run-at       document-start
 // @updateURL    https://githubusercontent.com
 // @downloadURL  https://githubusercontent.com
 // @grant        none
-// ==/UserScript==
-// @name         Casino Google Form Input (Reliable + Lightweight)
-// @namespace    http://tampermonkey.net/
-// @version      1.58.0
-// @description  Popup form to submit SC data to a Google Form; full per-site detection with centralized helpers; trimmed CSS; reduced polling overhead; consistent auto-submit. Element picker for custom SC selectors, plus an API/network (fetch/XHR/WebSocket) value picker that supports combining two separately-captured values (e.g. redeemable + non-redeemable SC) into one summed total. Form closes instantly on Submit instead of waiting on the server round trip. Added 19 casino/site matches found missing from the bookmarks bar (Midnight Reset, 24 Hour Timer, AutoCollect folders).
-// @author       Grok
-// @run-at       document-start
 // @match        https://play.babacasino.com/*
 // @match        https://lobby.chumbacasino.com/*
 // @match        https://play.clubs.poker/*
