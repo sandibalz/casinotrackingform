@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Casino Google Form Input (Reliable + Lightweight)
 // @namespace    http://tampermonkey.net/
-// @version      1.59.0
-// @description  Popup form to submit SC data to a Google Form; full per-site detection with centralized helpers; trimmed CSS; reduced polling overhead; consistent auto-submit. Element picker for custom SC selectors, plus an API/network (fetch/XHR/WebSocket) value picker that supports combining two separately-captured values (e.g. redeemable + non-redeemable SC) into one summed total. Form closes instantly on Submit instead of waiting on the server round trip. Owner is no longer hardcoded — chosen once per browser and saved locally, so this one file works for every owner and survives auto-updates. Added 19 casino/site matches found missing from the bookmarks bar (Midnight Reset, 24 Hour Timer, AutoCollect folders).
+// @version      1.60.0
+// @description  Popup form to submit SC data to a Google Form; full per-site detection with centralized helpers; trimmed CSS; reduced polling overhead; consistent auto-submit. Element picker for custom SC selectors, plus an API/network (fetch/XHR/WebSocket) value picker that supports combining two separately-captured values (e.g. redeemable + non-redeemable SC) into one summed total. Form closes instantly on Submit instead of waiting on the server round trip. Owner is no longer hardcoded — chosen once per browser and saved locally, so this one file works for every owner and survives auto-updates. Added 19 casino/site matches found missing from the bookmarks bar (Midnight Reset, 24 Hour Timer, AutoCollect folders). Added a fortunewins.com balance entry (÷100 scaling) — fortunecoins.com redirects there, so the old entry never actually fired.
 // @author       Grok
 // @run-at       document-start
 // @match        https://play.babacasino.com/*
@@ -566,6 +566,15 @@
           scCheck: (el) => /SC/i.test(el.closest('div.balance-panel')?.textContent?.trim() || '')
         },
         'www.fortunecoins.com': {
+          selector: 'button.FCButtonText div.textDecimals.desktop > span, button.FCButtonText div.textDecimals > span',
+          textFilter: numericRegex,
+          processValue: (value) => processValue(value, { divideBy100: true })
+        },
+        // fortunecoins.com redirects to fortunewins.com in the browser (window.location.hostname
+        // becomes fortunewins.com), so the entry above never actually matched live — this uses the
+        // same selector/scaling under the hostname the page really runs on. Its on-page counter is a
+        // raw integer "currency" (e.g. shows 817 for an actual $8.17 SC balance), same ÷100 pattern.
+        'fortunewins.com': {
           selector: 'button.FCButtonText div.textDecimals.desktop > span, button.FCButtonText div.textDecimals > span',
           textFilter: numericRegex,
           processValue: (value) => processValue(value, { divideBy100: true })
