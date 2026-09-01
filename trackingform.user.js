@@ -1,13 +1,10 @@
 // ==UserScript==
 // @name         Casino Google Form Input (Reliable + Lightweight)
 // @namespace    http://tampermonkey.net/
-// @version      1.58.5
-// @description  Popup form to submit SC data to a Google Form; full per-site
-// @author       Grok / sandibalz
+// @version      1.59.0
+// @description  Popup form to submit SC data to a Google Form; full per-site detection with centralized helpers; trimmed CSS; reduced polling overhead; consistent auto-submit. Element picker for custom SC selectors, plus an API/network (fetch/XHR/WebSocket) value picker that supports combining two separately-captured values (e.g. redeemable + non-redeemable SC) into one summed total. Form closes instantly on Submit instead of waiting on the server round trip. Owner is no longer hardcoded — chosen once per browser and saved locally, so this one file works for every owner and survives auto-updates. Added 19 casino/site matches found missing from the bookmarks bar (Midnight Reset, 24 Hour Timer, AutoCollect folders).
+// @author       Grok
 // @run-at       document-start
-// @updateURL    https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/trackingform.user.js
-// @downloadURL  https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/trackingform.user.js
-// @grant        none
 // @match        https://play.babacasino.com/*
 // @match        https://lobby.chumbacasino.com/*
 // @match        https://play.clubs.poker/*
@@ -96,13 +93,58 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_deleteValue
+// @grant        GM_registerMenuCommand
+// @updateURL    https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/trackingform.user.js
+// @downloadURL  https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/trackingform.user.js
 // ==/UserScript==
 
 (function() {
   'use strict';
 
+  // --- Owner identity ---
+  // Used to be a hardcoded `const defaultOwner = 'Ben'` line that had to be hand-edited
+  // per computer — which meant this file could never be the same for everyone, so it
+  // could never safely auto-update from a single shared URL (pulling always overwrote
+  // whichever owner value was baked into the source). Now the owner is asked once per
+  // browser and saved via GM_setValue, which lives in that browser's Tampermonkey
+  // storage — separate from the script's source code — so future auto-updates never
+  // touch it.
+  const VALID_OWNERS = ['Ben', 'Cindy', 'Tyler', 'Jessica'];
+
+  function promptForOwner(currentValue) {
+    let choice = null;
+    while (!choice) {
+      const input = prompt(`Which owner is this computer for? Type one of: ${VALID_OWNERS.join(', ')}`, currentValue || '');
+      if (input === null) {
+        // Cancelled — fall back to whatever's already saved, or the first owner as a last resort
+        return currentValue || VALID_OWNERS[0];
+      }
+      const match = VALID_OWNERS.find(o => o.toLowerCase() === input.trim().toLowerCase());
+      if (match) choice = match;
+      else alert(`"${input}" isn't one of: ${VALID_OWNERS.join(', ')}. Try again.`);
+    }
+    return choice;
+  }
+
+  function getOwner() {
+    let owner = GM_getValue('scOwner', '');
+    if (!owner || !VALID_OWNERS.includes(owner)) {
+      owner = promptForOwner(owner);
+      GM_setValue('scOwner', owner);
+    }
+    return owner;
+  }
+
+  if (typeof GM_registerMenuCommand === 'function') {
+    GM_registerMenuCommand('Change SC Tracker Owner', () => {
+      const newOwner = promptForOwner(GM_getValue('scOwner', ''));
+      GM_setValue('scOwner', newOwner);
+      alert(`SC Tracker owner set to: ${newOwner}`);
+    });
+  }
+  // --- End Owner identity ---
+
   // Config
-  const defaultOwner = 'Ben'; // set to this computer's owner name (Ben/Cindy/Tyler/Jessica) — was hardcoded to 'Scott', a leftover from an old version, so auto-submitted entries were landing under a nonexistent owner
   const numericRegex = /^\d{1,3}(,\d{3})*(\.\d+)?$/;
   const scCurrencyRegexDisplay = /^\$\d{1,3}(,\d{3})*(\.\d{2})$/;
   const noAutoSubmitSites = [
@@ -1168,7 +1210,7 @@
     };
 
     const casinoInput = makeField('Casino*:', window.location.hostname);
-    const ownerInput = makeField('Owner*:', defaultOwner);
+    const ownerInput = makeField('Owner*:', getOwner());
     const scInput = makeField('Current SC Amount:', '', false, 'Enter Current SC Amount');
     getSCBalanceAsync().then(val => { if (val) scInput.value = val; });
     makeField('Last Submitted SC Amount:', GM_getValue(`lastSC_${window.location.hostname}`, 'N/A'), true);
@@ -1320,7 +1362,7 @@
           if (sc === lastSC) return; // unchanged since last recorded value for this casino — skip, don't log a duplicate row
           const payload = new URLSearchParams({
             'casino': hostname,
-            'owner': defaultOwner,
+            'owner': getOwner(),
             'sc': sc,
             'action': '',
             'amount': ''
