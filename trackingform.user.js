@@ -1,14 +1,14 @@
 // ==UserScript==
-// @name         My Shared Script
+// @name         Casino Tracking Form
 // @namespace    http://tampermonkey.net
-// @version      1.0.0
+// @version      1.0.2
 // @description  Automatically updates across devices
-// @author       Your Name
+// @author       sandibalz
 // @match        https://*://*
-// @updateURL    PASTE_RAW_URL_HERE
-// @downloadURL  PASTE_RAW_URL_HERE
+// @updateURL    https://githubusercontent.com
+// @downloadURL  https://githubusercontent.com
 // @grant        none
-// ==UserScript==
+// ==/UserScript==
 // @name         Casino Google Form Input (Reliable + Lightweight)
 // @namespace    http://tampermonkey.net/
 // @version      1.58.0
