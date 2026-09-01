@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         Casino Google Form Input (Reliable + Lightweight)
 // @namespace    http://tampermonkey.net/
-// @version      1.58.3
+// @version      1.58.4
 // @description  Popup form to submit SC data to a Google Form; full per-site
 // @author       Grok / sandibalz
 // @run-at       document-start
-// @updateURL    https://githubusercontent.com
-// @downloadURL  https://githubusercontent.com
+// @updateURL    https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/trackingform.user.js
+// @downloadURL  https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/trackingform.user.js
 // @grant        none
 // ==/UserScript==
 // @match        https://play.babacasino.com/*
