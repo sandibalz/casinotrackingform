@@ -8,7 +8,6 @@
 // @updateURL    https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/trackingform.user.js
 // @downloadURL  https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/trackingform.user.js
 // @grant        none
-// ==/UserScript==
 // @match        https://play.babacasino.com/*
 // @match        https://lobby.chumbacasino.com/*
 // @match        https://play.clubs.poker/*
