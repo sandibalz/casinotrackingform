@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Casino Google Form Input (Reliable + Lightweight)
 // @namespace    http://tampermonkey.net/
-// @version      1.64.0
-// @description  Popup form to submit SC data to a Google Form; full per-site detection with centralized helpers; trimmed CSS; reduced polling overhead; consistent auto-submit. Element picker for custom SC selectors, plus an API/network (fetch/XHR/WebSocket) value picker that supports combining two separately-captured values (e.g. redeemable + non-redeemable SC) into one summed total. Form closes instantly on Submit instead of waiting on the server round trip. Owner is no longer hardcoded — chosen once per browser and saved locally, so this one file works for every owner and survives auto-updates. Added 19 casino/site matches found missing from the bookmarks bar (Midnight Reset, 24 Hour Timer, AutoCollect folders). Added a fortunewins.com balance entry (÷100 scaling) — fortunecoins.com redirects there, so the old entry never actually fired. The Auto Login & Collect feature (briefly bundled here in v1.61.0) was moved out to its own separate userscript, autocollect.user.js, so it can be enabled/disabled independently of this SC-tracking script. Both submission paths retry (up to 2 extra attempts with backoff) on a network error or timeout. Auto-submit's fixed 10s post-load delay is randomized 10-15s to spread out multiple tabs. Submissions now POST directly to the Google Form (bypassing the Apps Script Web App entirely for appends) — the Web App's per-request read/scan/write was the real source of the reported network errors, not just something to retry around. Growth control and "current balance" upkeep moved server-side to a scheduled Apps Script cleanup instead of a live per-submission upsert.
+// @version      1.65.0
+// @description  Popup form to submit SC data to a Google Form; full per-site detection with centralized helpers; trimmed CSS; reduced polling overhead; consistent auto-submit. Element picker for custom SC selectors, plus an API/network (fetch/XHR/WebSocket) value picker that supports combining two separately-captured values (e.g. redeemable + non-redeemable SC) into one summed total. Form closes instantly on Submit instead of waiting on the server round trip. Owner is no longer hardcoded — chosen once per browser and saved locally, so this one file works for every owner and survives auto-updates. Added 19 casino/site matches found missing from the bookmarks bar (Midnight Reset, 24 Hour Timer, AutoCollect folders). Added a fortunewins.com balance entry (÷100 scaling) — fortunecoins.com redirects there, so the old entry never actually fired. The Auto Login & Collect feature (briefly bundled here in v1.61.0) was moved out to its own separate userscript, autocollect.user.js, so it can be enabled/disabled independently of this SC-tracking script. Both submission paths retry (up to 2 extra attempts with backoff) on a network error or timeout. Auto-submit's fixed 10s post-load delay is randomized 10-15s to spread out multiple tabs. Submissions now POST directly to the Google Form (bypassing the Apps Script Web App entirely for appends) — the Web App's per-request read/scan/write was the real source of the reported network errors, not just something to retry around. Growth control and "current balance" upkeep moved server-side to a scheduled Apps Script cleanup instead of a live per-submission upsert. The form, trigger buttons, and API picker now survive being wiped by a site's own SPA re-render shortly after they're injected (reported on myprize.us: form flashes then disappears) — they re-attach themselves automatically unless closed on purpose.
 // @author       Grok
 // @run-at       document-start
 // @match        https://play.babacasino.com/*
@@ -255,6 +255,20 @@
     }
     return false;
   };
+
+  // Some SPA-heavy sites (reported on myprize.us, 9/2/26: "displays for a second and then
+  // disappears") finish their own app mount shortly after our script injects the form/buttons,
+  // and in doing so wipe or replace document.body's children — including whatever we just added,
+  // with no error and no user action involved. This watches an element we appended and
+  // re-attaches it if something else detaches it. Returns a stop() function — call it from the
+  // element's own close handler so an intentional close doesn't get fought and re-shown.
+  function keepElementAlive(el, parent = document.body) {
+    const observer = new MutationObserver(() => {
+      if (!parent.contains(el)) parent.appendChild(el);
+    });
+    observer.observe(parent, { childList: true });
+    return () => observer.disconnect();
+  }
 
   // --- Network/API Value Capture ---
   // Hooks fetch/XHR/WebSocket so we can read the same JSON the page's own balance calls
@@ -1240,12 +1254,13 @@
     closeBtn.className = 'api-btn';
     closeBtn.style.background = '#f44336';
     closeBtn.textContent = 'Close';
-    closeBtn.onclick = () => { document.body.removeChild(container); };
     btnRow.appendChild(closeBtn);
 
     modal.appendChild(btnRow);
     shadow.appendChild(modal);
     document.body.appendChild(container);
+    const stopPickerKeepAlive = keepElementAlive(container);
+    closeBtn.onclick = () => { stopPickerKeepAlive(); document.body.removeChild(container); };
 
     // Initial paint
     updateCurrentInfo();
@@ -1373,6 +1388,7 @@
     form.appendChild(submitButton); form.appendChild(closeButton);
     formContainer.appendChild(form); shadow.appendChild(formContainer);
     document.body.appendChild(container);
+    const stopFormKeepAlive = keepElementAlive(container);
 
     form.onsubmit = (e) => {
       e.preventDefault();
@@ -1389,6 +1405,7 @@
       // still completes in the background (with automatic retries — see submitToTracker
       // above); a failure still surfaces via alert() even though the form has already
       // closed, but only once every retry has been exhausted.
+      stopFormKeepAlive();
       document.body.removeChild(container);
       submitToTracker({ casino: casinoVal, owner: ownerVal, sc: scVal, action: actionVal, amount: amountVal }, {
         onSuccess: () => {
@@ -1400,7 +1417,7 @@
         }
       });
     };
-    closeButton.onclick = () => { document.body.removeChild(container); };
+    closeButton.onclick = () => { stopFormKeepAlive(); document.body.removeChild(container); };
   }
 
   // Trigger buttons (bottom-right)
@@ -1420,9 +1437,10 @@
     const closeXButton = document.createElement('button');
     closeXButton.textContent = 'X';
     Object.assign(closeXButton.style, { padding:'5px 8px', background:'#f44336', color:'#fff', border:'none', borderRadius:'4px', cursor:'pointer' });
-    closeXButton.onclick = () => { document.body.removeChild(buttonContainer); };
     buttonContainer.appendChild(triggerButton); buttonContainer.appendChild(apiPickerButton); buttonContainer.appendChild(closeXButton);
     document.body.appendChild(buttonContainer);
+    const stopButtonsKeepAlive = keepElementAlive(buttonContainer);
+    closeXButton.onclick = () => { stopButtonsKeepAlive(); document.body.removeChild(buttonContainer); };
   }
 
   // Auto-submission (SC-only)
