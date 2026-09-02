@@ -13,8 +13,8 @@
 // @match       https://luckparty.com/login*
 // @match       https://www.luckparty.com/login*
 // @grant       none
-// @version     3.2
-// @description Waits for captcha to solve, then auto-clicks the correct login button for each casino.
+// @version     3.3
+// @description Waits for captcha to solve, then auto-clicks the correct login button for each casino. Shows an on-screen log so you can see it working.
 // @updateURL   https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
 // @downloadURL https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
 // ==/UserScript==
@@ -60,6 +60,66 @@
             if (host.includes(domain)) return SITE_MAP[domain];
         }
         return null;
+    }
+
+    // ---- On-screen log panel -------------------------------------------------
+    // Everything still goes to console.log too, but a floating panel means you
+    // don't have to open DevTools to see whether the script is doing anything.
+    let logHost = null;
+    let logList = null;
+
+    function ensureLogPanel() {
+        if (logHost && logHost.isConnected) return;
+        const host = document.createElement('div');
+        host.id = 'autologin-log-host';
+        host.style.cssText = 'position:fixed;bottom:10px;right:10px;z-index:2147483647;';
+        const shadow = host.attachShadow({ mode: 'open' });
+        shadow.innerHTML = `
+            <style>
+                .panel {
+                    font: 11px/1.4 -apple-system, Segoe UI, Arial, sans-serif;
+                    background: rgba(20,20,20,0.92);
+                    color: #eee;
+                    padding: 6px 8px;
+                    border-radius: 8px;
+                    width: 260px;
+                    max-height: 150px;
+                    overflow-y: auto;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+                }
+                .title { color: #7fd1ff; font-weight: bold; margin-bottom: 3px; }
+                .line { white-space: pre-wrap; word-break: break-word; margin-bottom: 1px; }
+                .line.warn { color: #ffb84d; }
+            </style>
+            <div class="panel">
+                <div class="title">Auto Login</div>
+                <div id="lines"></div>
+            </div>
+        `;
+        document.documentElement.appendChild(host);
+        logHost = host;
+        logList = shadow.getElementById('lines');
+
+        // Re-attach if the page ever tears the host out (SPA re-renders, etc.)
+        setInterval(() => {
+            if (!document.documentElement.contains(logHost)) {
+                document.documentElement.appendChild(logHost);
+            }
+        }, 2000);
+    }
+
+    function uiLog(msg, isWarn) {
+        console.log('[AutoLogin] ' + msg);
+        try {
+            ensureLogPanel();
+            const line = document.createElement('div');
+            line.className = 'line' + (isWarn ? ' warn' : '');
+            line.textContent = new Date().toLocaleTimeString() + ' — ' + msg;
+            logList.appendChild(line);
+            while (logList.children.length > 8) logList.removeChild(logList.firstChild);
+        } catch (_) {
+            // Page may not allow DOM writes this early (rare) — console.log above still fired.
+        }
     }
 
     function findGoogleButton() {
@@ -122,7 +182,9 @@
         // own JS listens for, so it can treat the field as "empty" until a real click
         // touches it. Re-set the value via the native setter (bypasses any framework
         // override) and fire input/change so the site's state catches up.
-        if (!el) return;
+        // IMPORTANT: never force-clear a field — if it's already empty (autofill
+        // hasn't landed yet, or the site cleared it) there is nothing safe to "nudge".
+        if (!el || !el.value) return;
         const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
         const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
         if (setter) setter.call(el, el.value);
@@ -134,11 +196,11 @@
         const form = btn.closest('form');
         if (form && typeof form.requestSubmit === 'function') {
             form.requestSubmit(btn);
-            console.log(`requestSubmit used for ${location.hostname}`);
+            uiLog(`requestSubmit used for ${location.hostname}`);
             return true;
         } else if (form) {
             form.submit();
-            console.log(`form.submit() used for ${location.hostname}`);
+            uiLog(`form.submit() used for ${location.hostname}`);
             return true;
         }
         return false;
@@ -147,7 +209,7 @@
     function clickLoginButton(retryUntil = Date.now() + 8000) {
         const config = getSiteConfig();
         if (!config) {
-            console.log("No site config found.");
+            uiLog("No site config found for " + location.hostname, true);
             return;
         }
 
@@ -157,7 +219,7 @@
                       document.querySelector(config.selector);
 
             if (btn) {
-                console.log(`Custom button found for ${location.hostname} — disabled=${btn.disabled}, text="${btn.innerText.trim()}"`);
+                uiLog(`Custom button found for ${location.hostname} — disabled=${btn.disabled}, text="${btn.innerText.trim()}"`);
             }
 
             if (btn && !btn.disabled) {
@@ -168,85 +230,112 @@
                     if (config.clickMode === "click") {
                         // React/Next.js sites: dispatch real pointer events on the button.
                         humanClick(btn);
-                        console.log(`humanClick used for ${location.hostname}`);
+                        uiLog(`Clicked login button for ${location.hostname}`);
                         // Belt-and-suspenders: if still on the login page shortly after, try native submit.
                         setTimeout(() => {
                             if (/\/login/.test(location.pathname)) {
-                                console.log("Still on login page after humanClick — trying form submit as backup");
+                                uiLog("Still on login page after click — trying form submit as backup");
                                 submitViaForm(btn);
                             }
                         }, 800);
                     } else if (!submitViaForm(btn)) {
                         // No form — fall back to simulated human click
                         humanClick(btn);
-                        console.log(`humanClick used for ${location.hostname}`);
+                        uiLog(`Clicked login button for ${location.hostname}`);
                     }
                     return;
                 }
             }
 
             if (Date.now() < retryUntil) {
-                console.log("Custom button not ready yet, retrying...");
+                uiLog("Custom button not ready yet, retrying...");
                 setTimeout(() => clickLoginButton(retryUntil), 300);
             } else {
-                console.log("Custom login button not found/ready after retries.");
+                uiLog("Custom login button not found/ready after retries.", true);
             }
         } else if (config.type === "password") {
             const emailField = document.querySelector(config.emailSelector);
             const passwordField = document.querySelector(config.passwordSelector);
             const btn = document.querySelector(config.loginButtonSelector);
 
-            if (emailField && passwordField && btn && !btn.disabled) {
-                // Click into each field first — saved/autofilled values don't always
-                // register with the site's own JS until a real click touches the field.
-                humanClick(emailField);
-                nudgeField(emailField);
-                humanClick(passwordField);
-                nudgeField(passwordField);
-
-                setTimeout(() => {
-                    const btnText = btn.innerText.trim();
-                    if (!config.loginButtonText || btnText === config.loginButtonText) {
-                        humanClick(btn);
-                        console.log(`humanClick used for ${location.hostname} (password login)`);
-                        setTimeout(() => {
-                            if (/\/login/.test(location.pathname)) {
-                                console.log("Still on login page after humanClick — trying form submit as backup");
-                                submitViaForm(btn);
-                            }
-                        }, 800);
-                    } else {
-                        console.log(`Login button text mismatch for ${location.hostname}: "${btnText}"`);
-                    }
-                }, 200);
+            if (!emailField || !passwordField || !btn) {
+                if (Date.now() < retryUntil) {
+                    uiLog("Waiting for email/password fields and Login button to appear...");
+                    setTimeout(() => clickLoginButton(retryUntil), 300);
+                } else {
+                    uiLog("Email/password fields or Login button never appeared.", true);
+                }
                 return;
             }
 
-            if (Date.now() < retryUntil) {
-                console.log("Password login fields/button not ready yet, retrying...");
-                setTimeout(() => clickLoginButton(retryUntil), 300);
-            } else {
-                console.log("Password login fields/button not found after retries.");
+            if (btn.disabled) {
+                if (Date.now() < retryUntil) {
+                    setTimeout(() => clickLoginButton(retryUntil), 300);
+                } else {
+                    uiLog("Login button stayed disabled after retries.", true);
+                }
+                return;
             }
+
+            if (!emailField.value || !passwordField.value) {
+                // Don't touch the fields until the browser has actually put saved
+                // values in them — nudging an empty field just confirms "empty" to
+                // the site's own React/JS state and can wipe out a slightly-later
+                // real autofill.
+                if (Date.now() < retryUntil) {
+                    uiLog("Waiting for saved email/password to autofill...");
+                    setTimeout(() => clickLoginButton(retryUntil), 300);
+                } else {
+                    uiLog("Email/password never autofilled — log in manually this time.", true);
+                }
+                return;
+            }
+
+            uiLog("Email + password detected — clicking into both fields...");
+            humanClick(emailField);
+            nudgeField(emailField);
+            humanClick(passwordField);
+            nudgeField(passwordField);
+
+            setTimeout(() => {
+                if (!emailField.value || !passwordField.value) {
+                    uiLog("Email/password went blank after clicking in — not submitting. Please log in manually.", true);
+                    return;
+                }
+                const btnText = btn.innerText.trim();
+                if (!config.loginButtonText || btnText === config.loginButtonText) {
+                    uiLog("Clicking Login...");
+                    humanClick(btn);
+                    setTimeout(() => {
+                        if (/\/login/.test(location.pathname)) {
+                            uiLog("Still on login page after clicking Login — trying form submit as backup");
+                            submitViaForm(btn);
+                        }
+                    }, 800);
+                } else {
+                    uiLog(`Login button text mismatch: "${btnText}"`, true);
+                }
+            }, 200);
         } else {
             const btn = findGoogleButton();
             if (btn) {
                 humanClick(btn);
-                console.log("Clicked Google login button");
+                uiLog("Clicked Google login button");
             } else if (Date.now() < retryUntil) {
-                console.log("Google button not ready yet, retrying...");
+                uiLog("Google button not ready yet, retrying...");
                 setTimeout(() => clickLoginButton(retryUntil), 300);
             } else {
-                console.log("Google login button not found after retries.");
+                uiLog("Google login button not found after retries.", true);
             }
         }
     }
 
     function waitForCaptchaSolved() {
+        uiLog("Active on " + location.hostname + " — watching for CAPTCHA-solved signal...");
         const interval = setInterval(() => {
             const captchaDiv = document.querySelector("div.capsolver-solver-info");
             if (captchaDiv && captchaDiv.innerText.trim() === "Captcha solved!") {
-                console.log("Captcha solved detected! Waiting 8s before login click...");
+                uiLog("Captcha solved — waiting 12s before login click...");
                 clearInterval(interval);
                 setTimeout(clickLoginButton, 12000);
             }
@@ -254,7 +343,7 @@
 
         setTimeout(() => {
             clearInterval(interval);
-            console.log("Captcha timeout — attempting login anyway");
+            uiLog("Captcha signal timed out after 30s — attempting login anyway.", true);
             clickLoginButton();
         }, 30000);
     }
