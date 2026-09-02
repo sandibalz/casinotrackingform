@@ -13,7 +13,7 @@
 // @match       https://luckparty.com/login*
 // @match       https://www.luckparty.com/login*
 // @grant       none
-// @version     4.1
+// @version     4.2
 // @description Waits for captcha to solve, then auto-clicks the correct login button for each casino. Shows an on-screen log so you can see it working.
 // @updateURL   https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
 // @downloadURL https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
@@ -43,15 +43,7 @@
         "zulacasino.com":   { type: "google" },
         "fortunecoins.com": { type: "google" },
         "fortunewins.com":  { type: "google" },
-        "luckparty.com": {
-            type: "password",
-            // Real username/password form, not Google SSO. Explicit id selectors so we
-            // never touch the separate "LOGIN WITH AN EMAIL LINK" magic-link button.
-            emailSelector: '#field-email',
-            passwordSelector: '#field-password',
-            loginButtonSelector: 'button.login-btn[type="submit"]',
-            loginButtonText: "Login"
-        }
+        "luckparty.com":    { type: "google" }
     };
 
     function getSiteConfig() {
