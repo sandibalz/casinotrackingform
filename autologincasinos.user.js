@@ -13,7 +13,7 @@
 // @match       https://luckparty.com/login*
 // @match       https://www.luckparty.com/login*
 // @grant       none
-// @version     3.6
+// @version     3.7
 // @description Waits for captcha to solve, then auto-clicks the correct login button for each casino. Shows an on-screen log so you can see it working.
 // @updateURL   https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
 // @downloadURL https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
@@ -178,18 +178,20 @@
     }
 
     function nudgeField(el) {
-        // Autofilled/saved values don't always fire the input/change events a site's
-        // own JS listens for, so it can treat the field as "empty" until a real click
-        // touches it. Re-set the value via the native setter (bypasses any framework
-        // override) and fire input/change so the site's state catches up.
+        // Same recipe that fixed this exact symptom in autocollect.user.js: re-set the
+        // value via the native setter (bypasses any framework override) and fire
+        // input/change so the site's state catches up, then blur — leaving the field
+        // focused-but-uncommitted is what was popping the "required" validation error.
         // IMPORTANT: never force-clear a field — if it's already empty (autofill
         // hasn't landed yet, or the site cleared it) there is nothing safe to "nudge".
         if (!el || !el.value) return;
+        el.focus();
         const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
         const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
         if (setter) setter.call(el, el.value);
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.blur();
     }
 
     function submitViaForm(btn) {
@@ -254,11 +256,14 @@
                 uiLog("Custom login button not found/ready after retries.", true);
             }
         } else if (config.type === "password") {
-            // Simplified per feedback: the field-value check never went non-zero even
-            // when the field visually had a value in it (likely a paint-only autofill
-            // preview that JS can't see), so stop gating on it entirely. Just click into
-            // the email/username field once, then go straight for Login — don't touch
-            // the password field at all.
+            // Password field is never touched (per feedback). Email/username still
+            // needs the wait-for-value + nudge treatment though — v3.6 skipped both and
+            // that's what caused the "required" validation error to pop on click: the
+            // field was still genuinely empty at that moment (confirmed by the v3.5
+            // diagnostic build), and clicking-then-blurring an empty field is exactly
+            // what triggers that error. Waiting for a real value first (this DOES land,
+            // just not always within ~8s) and using nudgeField's focus→set→events→blur
+            // sequence — the same recipe that fixed this in autocollect.user.js — avoids it.
             const emailField = document.querySelector(config.emailSelector);
             const btn = document.querySelector(config.loginButtonSelector);
 
@@ -281,8 +286,19 @@
                 return;
             }
 
-            uiLog("Clicking into the email field...");
+            if (!emailField.value) {
+                if (Date.now() < retryUntil) {
+                    uiLog(`Waiting for saved email to autofill (currently ${emailField.value.length} chars)...`);
+                    setTimeout(() => clickLoginButton(retryUntil), 500);
+                } else {
+                    uiLog("Email never autofilled after 20s — log in manually this time.", true);
+                }
+                return;
+            }
+
+            uiLog(`Email detected (${emailField.value.length} chars) — clicking into it...`);
             humanClick(emailField);
+            nudgeField(emailField);
 
             setTimeout(() => {
                 const btnText = btn.innerText.trim();
