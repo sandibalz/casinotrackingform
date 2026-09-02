@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Auto Login & Collect (Casino Sites)
 // @namespace    http://tampermonkey.net/
-// @version      1.1.0
-// @description  Per-site, click-to-teach automation: optionally click into saved login fields first (forces sites that ignore browser autofill to notice the values), click Login, pause 10s (for a CAPTCHA you solve by hand — this script never tries to detect or solve one itself), poll for popups + Collect (buttons that aren't there yet or ever), and show a persistent on-screen log of what actually happened. Runs everywhere but is a complete no-op until you teach it on a given site. Separate from the SC-tracking script so it can be enabled/disabled independently.
+// @version      1.2.0
+// @description  Per-site, click-to-teach automation: optionally click into saved login fields first (forces sites that ignore browser autofill to notice the values), click Login, pause 10s (for a CAPTCHA you solve by hand — this script never tries to detect or solve one itself), poll for popups + Collect (buttons that aren't there yet or ever) using a saved selector with a text/attribute-based fallback if the selector stops matching, and show a persistent on-screen log of what actually happened. Runs everywhere but is a complete no-op until you teach it on a given site. Separate from the SC-tracking script so it can be enabled/disabled independently.
 // @author       Grok
 // @run-at       document-idle
 // @match        https://*/*
@@ -286,29 +286,126 @@
     return rect.width > 0 && rect.height > 0;
   }
 
+  // ── Selector + fallback matching ────────────────────────────────────────────
+  // A taught target is saved as { selector, helper }, not just a bare CSS selector, so it
+  // can still be found if the saved selector stops matching (a class name changed, the
+  // element moved in the DOM, this is a different popup than the one taught). `helper` is
+  // built at teach time from whatever's actually stable about that kind of element: for a
+  // button/link, its visible text; for a form field, its autocomplete/name/placeholder/type
+  // — CSS selectors built from hashed class names or DOM position are the most likely to
+  // break, so this gives every taught target a second way to be found.
+  // Configs saved before this existed just have a bare string here — normalizeTarget()
+  // makes both shapes look the same to the rest of the script.
+  function normalizeTarget(x) {
+    if (!x) return { selector: '', helper: null };
+    if (typeof x === 'string') return { selector: x, helper: null };
+    return { selector: x.selector || '', helper: x.helper || null };
+  }
+
+  function describeElement(el) {
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+      return {
+        kind: 'field',
+        type: (el.type || '').toLowerCase(),
+        name: el.name || '',
+        placeholder: el.placeholder || '',
+        autocomplete: el.autocomplete || '',
+        ariaLabel: el.getAttribute('aria-label') || ''
+      };
+    }
+    return {
+      kind: 'clickable',
+      text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80)
+    };
+  }
+
+  function findByHelper(helper) {
+    if (!helper) return null;
+    if (helper.kind === 'field') {
+      const candidates = Array.from(document.querySelectorAll('input, textarea, select'));
+      if (helper.autocomplete) {
+        const m = candidates.find(el => (el.autocomplete || '').toLowerCase() === helper.autocomplete.toLowerCase());
+        if (m) return m;
+      }
+      if (helper.name) {
+        const m = candidates.find(el => el.name === helper.name && (!helper.type || (el.type || '').toLowerCase() === helper.type));
+        if (m) return m;
+      }
+      if (helper.placeholder) {
+        const m = candidates.find(el => (el.placeholder || '') === helper.placeholder);
+        if (m) return m;
+      }
+      if (helper.ariaLabel) {
+        const m = candidates.find(el => (el.getAttribute('aria-label') || '') === helper.ariaLabel);
+        if (m) return m;
+      }
+      if (helper.type) {
+        const m = candidates.find(el => (el.type || '').toLowerCase() === helper.type);
+        if (m) return m; // last resort — e.g. only one password field on the page
+      }
+      return null;
+    }
+    if (!helper.text) return null;
+    const candidates = document.querySelectorAll('button, a, [role="button"], .btn, .button');
+    const norm = helper.text.toLowerCase();
+    const normText = (el) => (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    for (const el of candidates) {
+      if (normText(el) === norm) return el;
+    }
+    for (const el of candidates) {
+      const t = normText(el);
+      if (t && (t.includes(norm) || norm.includes(t))) return el;
+    }
+    return null;
+  }
+
+  function labelFor(x) {
+    const t = normalizeTarget(x);
+    if (!t.selector && !t.helper) return 'Not set';
+    let extra = '';
+    if (t.helper) {
+      if (t.helper.kind === 'field') {
+        const hint = t.helper.autocomplete || t.helper.name || t.helper.placeholder || t.helper.type;
+        if (hint) extra = ` (${hint})`;
+      } else if (t.helper.text) {
+        extra = ` ("${t.helper.text}")`;
+      }
+    }
+    return `📌 ${t.selector || '[no selector — text/attribute match only]'}${extra}`;
+  }
+
   // Polls for `selector` up to timeoutMs (some popups/buttons aren't there yet, or are never
   // there this run), clicks it once found, then checks back after the click to see whether
   // anything about the element actually changed — instead of just assuming the click "worked"
   // the moment it's dispatched. Retries the click once if nothing changed.
-  async function waitAndClick(selector, label, { timeoutMs = 15000, intervalMs = 1000 } = {}) {
-    if (!selector) { logLine(`⏭ No ${label} saved — skipping`); return false; }
+  async function waitAndClick(target, label, { timeoutMs = 15000, intervalMs = 1000 } = {}) {
+    const t = normalizeTarget(target);
+    if (!t.selector && !t.helper) { logLine(`⏭ No ${label} saved — skipping`); return false; }
 
     const start = Date.now();
     let el = null;
+    let usedFallback = false;
     while (Date.now() - start < timeoutMs) {
-      try {
-        el = document.querySelector(selector);
-      } catch (e) {
-        logLine(`⚠️ ${label} — saved selector is invalid`);
-        return false;
+      el = null;
+      if (t.selector) {
+        try { el = document.querySelector(t.selector); } catch (e) { el = null; }
+      }
+      if ((!el || !looksClickable(el)) && t.helper) {
+        const fb = findByHelper(t.helper);
+        if (fb && looksClickable(fb)) { el = fb; usedFallback = true; }
       }
       if (el && looksClickable(el)) break;
       el = null;
       await sleep(intervalMs);
     }
     if (!el) {
-      logLine(`⚠️ ${label} not found/clickable within ${Math.round(timeoutMs / 1000)}s`);
+      const how = t.helper ? ' (tried the saved selector and a text/attribute fallback)' : '';
+      logLine(`⚠️ ${label} not found/clickable within ${Math.round(timeoutMs / 1000)}s${how}`);
       return false;
+    }
+    if (usedFallback) {
+      logLine(`ℹ️ ${label}: saved selector didn't match — found it via a text/attribute fallback instead`);
     }
 
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -338,17 +435,22 @@
     // Click into any saved login fields (username, password, ...) BEFORE clicking Login.
     // Some sites visually show the browser's saved autofill but don't register it internally
     // until the field is actually focused/interacted with — see nudgeField() above.
-    for (const sel of (config.preLoginSelectors || [])) {
-      try {
-        const el = document.querySelector(sel);
-        if (el) {
-          nudgeField(el);
-          logLine(`👆 Focused login field (${sel})`);
-        } else {
-          logLine(`⚠️ Login field not found: ${sel}`);
-        }
-      } catch (e) {
-        logLine(`⚠️ Login field selector invalid: ${sel}`);
+    for (const raw of (config.preLoginSelectors || [])) {
+      const t = normalizeTarget(raw);
+      let el = null;
+      let usedFallback = false;
+      if (t.selector) {
+        try { el = document.querySelector(t.selector); } catch (e) { el = null; }
+      }
+      if (!el && t.helper) {
+        el = findByHelper(t.helper);
+        if (el) usedFallback = true;
+      }
+      if (el) {
+        nudgeField(el);
+        logLine(`👆 Focused login field (${t.selector || '[fallback match]'})${usedFallback ? ' — via text/attribute fallback' : ''}`);
+      } else {
+        logLine(`⚠️ Login field not found: ${t.selector || '(no selector saved)'}`);
       }
       await sleep(300);
     }
@@ -458,12 +560,12 @@
     shadow.appendChild(modal);
 
     function render() {
-      loginLabel.textContent = config.loginSelector ? `📌 ${config.loginSelector}` : 'Not set';
-      collectLabel.textContent = config.collectSelector ? `📌 ${config.collectSelector}` : 'Not set';
+      loginLabel.textContent = labelFor(config.loginSelector);
+      collectLabel.textContent = labelFor(config.collectSelector);
       fieldListWrap.innerHTML = '';
       (config.preLoginSelectors || []).forEach((sel, i) => {
         const item = document.createElement('div'); item.className = 'ac-list-item';
-        const span = document.createElement('span'); span.textContent = `📌 ${i + 1}. ${sel}`;
+        const span = document.createElement('span'); span.textContent = `${i + 1}. ${labelFor(sel)}`;
         const rm = document.createElement('button'); rm.className = 'ac-btn'; rm.style.background = '#9e9e9e'; rm.style.padding = '2px 6px'; rm.textContent = '✕';
         rm.onclick = () => {
           config.preLoginSelectors.splice(i, 1);
@@ -476,7 +578,7 @@
       popupListWrap.innerHTML = '';
       (config.popupCloseSelectors || []).forEach((sel, i) => {
         const item = document.createElement('div'); item.className = 'ac-list-item';
-        const span = document.createElement('span'); span.textContent = `📌 ${sel}`;
+        const span = document.createElement('span'); span.textContent = labelFor(sel);
         const rm = document.createElement('button'); rm.className = 'ac-btn'; rm.style.background = '#9e9e9e'; rm.style.padding = '2px 6px'; rm.textContent = '✕';
         rm.onclick = () => {
           config.popupCloseSelectors.splice(i, 1);
@@ -499,9 +601,9 @@
     fieldBtn.onclick = () => {
       container.style.display = 'none';
       status.textContent = 'Click a login field on the page (e.g. username, then run this again for password)...';
-      pickElementGeneric((selector) => {
+      pickElementGeneric((selector, el) => {
         config.preLoginSelectors = config.preLoginSelectors || [];
-        config.preLoginSelectors.push(selector);
+        config.preLoginSelectors.push({ selector, helper: describeElement(el) });
         saveConfig(hostname, config);
         container.style.display = '';
         status.textContent = `✅ Login field #${config.preLoginSelectors.length} saved.`;
@@ -512,8 +614,8 @@
     loginBtn.onclick = () => {
       container.style.display = 'none';
       status.textContent = 'Click the Login button on the page...';
-      pickElementGeneric((selector) => {
-        config.loginSelector = selector;
+      pickElementGeneric((selector, el) => {
+        config.loginSelector = { selector, helper: describeElement(el) };
         saveConfig(hostname, config);
         container.style.display = '';
         status.textContent = '✅ Login button saved.';
@@ -524,9 +626,9 @@
     popupBtn.onclick = () => {
       container.style.display = 'none';
       status.textContent = 'Click a popup/ad close button on the page (Escape to cancel)...';
-      pickElementGeneric((selector) => {
+      pickElementGeneric((selector, el) => {
         config.popupCloseSelectors = config.popupCloseSelectors || [];
-        config.popupCloseSelectors.push(selector);
+        config.popupCloseSelectors.push({ selector, helper: describeElement(el) });
         saveConfig(hostname, config);
         container.style.display = '';
         status.textContent = `✅ Popup-close button #${config.popupCloseSelectors.length} saved.`;
@@ -537,8 +639,8 @@
     collectBtn.onclick = () => {
       container.style.display = 'none';
       status.textContent = 'Click the Collect button on the page...';
-      pickElementGeneric((selector) => {
-        config.collectSelector = selector;
+      pickElementGeneric((selector, el) => {
+        config.collectSelector = { selector, helper: describeElement(el) };
         saveConfig(hostname, config);
         container.style.display = '';
         status.textContent = '✅ Collect button saved.';
