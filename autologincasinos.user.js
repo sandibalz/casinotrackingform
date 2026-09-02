@@ -13,7 +13,7 @@
 // @match       https://luckparty.com/login*
 // @match       https://www.luckparty.com/login*
 // @grant       none
-// @version     3.4
+// @version     3.5
 // @description Waits for captcha to solve, then auto-clicks the correct login button for each casino. Shows an on-screen log so you can see it working.
 // @updateURL   https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
 // @downloadURL https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
@@ -206,7 +206,7 @@
         return false;
     }
 
-    function clickLoginButton(retryUntil = Date.now() + 8000) {
+    function clickLoginButton(retryUntil = Date.now() + 20000) {
         const config = getSiteConfig();
         if (!config) {
             uiLog("No site config found for " + location.hostname, true);
@@ -283,21 +283,25 @@
                 // the site's own React/JS state and can wipe out a slightly-later
                 // real autofill.
                 if (Date.now() < retryUntil) {
-                    uiLog("Waiting for saved email/password to autofill...");
-                    setTimeout(() => clickLoginButton(retryUntil), 300);
+                    // Length only — never logs the actual value — so we can see from the
+                    // on-screen panel whether the browser has genuinely committed a value
+                    // yet, even while it visually looks filled in.
+                    uiLog(`Waiting for saved email/password to autofill (currently sees ${emailField.value.length} / ${passwordField.value.length} chars)...`);
+                    setTimeout(() => clickLoginButton(retryUntil), 500);
                 } else {
-                    uiLog("Email/password never autofilled — log in manually this time.", true);
+                    uiLog("Email/password never registered a value after 20s — log in manually this time.", true);
                 }
                 return;
             }
 
-            uiLog("Email + password detected — clicking into both fields...");
+            uiLog(`Email + password detected (${emailField.value.length} / ${passwordField.value.length} chars) — clicking into both fields...`);
             humanClick(emailField);
             nudgeField(emailField);
             humanClick(passwordField);
             nudgeField(passwordField);
 
             setTimeout(() => {
+                uiLog(`After clicking in: ${emailField.value.length} / ${passwordField.value.length} chars`);
                 if (!emailField.value || !passwordField.value) {
                     uiLog("Email/password went blank after clicking in — not submitting. Please log in manually.", true);
                     return;
