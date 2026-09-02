@@ -13,7 +13,7 @@
 // @match       https://luckparty.com/login*
 // @match       https://www.luckparty.com/login*
 // @grant       none
-// @version     4.0
+// @version     4.1
 // @description Waits for captcha to solve, then auto-clicks the correct login button for each casino. Shows an on-screen log so you can see it working.
 // @updateURL   https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
 // @downloadURL https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
@@ -397,6 +397,23 @@
     const startupConfig = getSiteConfig();
     if (startupConfig && startupConfig.type === "password") {
         watchForAutofill(startupConfig);
+
+        // Experiment: click once on the page outside the login card, in case the page
+        // (or the browser) is waiting for some real interaction anywhere before it
+        // treats the tab as "actually being used" and commits autofill.
+        setTimeout(() => {
+            const emailField = pickVisible(startupConfig.emailSelector);
+            const card = emailField && (emailField.closest('form') || emailField);
+            if (!card) return;
+            const rect = card.getBoundingClientRect();
+            let x = rect.left - 80;
+            let y = Math.max(10, Math.min(window.innerHeight - 10, rect.top + rect.height / 2));
+            if (x < 10) { x = rect.right + 80; }        // no room on the left — try the right
+            if (x > window.innerWidth - 10) { x = window.innerWidth / 2; y = 10; } // last resort: top of page
+            const target = document.elementFromPoint(x, y) || document.body;
+            uiLog(`Clicking outside the login card once (${Math.round(x)}, ${Math.round(y)})...`);
+            humanClick(target);
+        }, 1000);
     }
 
     waitForCaptchaSolved();
