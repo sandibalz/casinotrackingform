@@ -13,7 +13,7 @@
 // @match       https://luckparty.com/login*
 // @match       https://www.luckparty.com/login*
 // @grant       none
-// @version     3.5
+// @version     3.6
 // @description Waits for captcha to solve, then auto-clicks the correct login button for each casino. Shows an on-screen log so you can see it working.
 // @updateURL   https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
 // @downloadURL https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
@@ -254,16 +254,20 @@
                 uiLog("Custom login button not found/ready after retries.", true);
             }
         } else if (config.type === "password") {
+            // Simplified per feedback: the field-value check never went non-zero even
+            // when the field visually had a value in it (likely a paint-only autofill
+            // preview that JS can't see), so stop gating on it entirely. Just click into
+            // the email/username field once, then go straight for Login — don't touch
+            // the password field at all.
             const emailField = document.querySelector(config.emailSelector);
-            const passwordField = document.querySelector(config.passwordSelector);
             const btn = document.querySelector(config.loginButtonSelector);
 
-            if (!emailField || !passwordField || !btn) {
+            if (!emailField || !btn) {
                 if (Date.now() < retryUntil) {
-                    uiLog("Waiting for email/password fields and Login button to appear...");
+                    uiLog("Waiting for the email field and Login button to appear...");
                     setTimeout(() => clickLoginButton(retryUntil), 300);
                 } else {
-                    uiLog("Email/password fields or Login button never appeared.", true);
+                    uiLog("Email field or Login button never appeared.", true);
                 }
                 return;
             }
@@ -277,35 +281,10 @@
                 return;
             }
 
-            if (!emailField.value || !passwordField.value) {
-                // Don't touch the fields until the browser has actually put saved
-                // values in them — nudging an empty field just confirms "empty" to
-                // the site's own React/JS state and can wipe out a slightly-later
-                // real autofill.
-                if (Date.now() < retryUntil) {
-                    // Length only — never logs the actual value — so we can see from the
-                    // on-screen panel whether the browser has genuinely committed a value
-                    // yet, even while it visually looks filled in.
-                    uiLog(`Waiting for saved email/password to autofill (currently sees ${emailField.value.length} / ${passwordField.value.length} chars)...`);
-                    setTimeout(() => clickLoginButton(retryUntil), 500);
-                } else {
-                    uiLog("Email/password never registered a value after 20s — log in manually this time.", true);
-                }
-                return;
-            }
-
-            uiLog(`Email + password detected (${emailField.value.length} / ${passwordField.value.length} chars) — clicking into both fields...`);
+            uiLog("Clicking into the email field...");
             humanClick(emailField);
-            nudgeField(emailField);
-            humanClick(passwordField);
-            nudgeField(passwordField);
 
             setTimeout(() => {
-                uiLog(`After clicking in: ${emailField.value.length} / ${passwordField.value.length} chars`);
-                if (!emailField.value || !passwordField.value) {
-                    uiLog("Email/password went blank after clicking in — not submitting. Please log in manually.", true);
-                    return;
-                }
                 const btnText = btn.innerText.trim();
                 // Case-insensitive: some sites CSS-uppercase the button (innerText
                 // reflects the rendered "LOGIN" even though the real text is "Login").
@@ -321,7 +300,7 @@
                 } else {
                     uiLog(`Login button text mismatch: "${btnText}"`, true);
                 }
-            }, 200);
+            }, 500);
         } else {
             const btn = findGoogleButton();
             if (btn) {
