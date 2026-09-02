@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Casino Google Form Input (Reliable + Lightweight)
 // @namespace    http://tampermonkey.net/
-// @version      1.60.0
-// @description  Popup form to submit SC data to a Google Form; full per-site detection with centralized helpers; trimmed CSS; reduced polling overhead; consistent auto-submit. Element picker for custom SC selectors, plus an API/network (fetch/XHR/WebSocket) value picker that supports combining two separately-captured values (e.g. redeemable + non-redeemable SC) into one summed total. Form closes instantly on Submit instead of waiting on the server round trip. Owner is no longer hardcoded — chosen once per browser and saved locally, so this one file works for every owner and survives auto-updates. Added 19 casino/site matches found missing from the bookmarks bar (Midnight Reset, 24 Hour Timer, AutoCollect folders). Added a fortunewins.com balance entry (÷100 scaling) — fortunecoins.com redirects there, so the old entry never actually fired.
+// @version      1.64.0
+// @description  Popup form to submit SC data to a Google Form; full per-site detection with centralized helpers; trimmed CSS; reduced polling overhead; consistent auto-submit. Element picker for custom SC selectors, plus an API/network (fetch/XHR/WebSocket) value picker that supports combining two separately-captured values (e.g. redeemable + non-redeemable SC) into one summed total. Form closes instantly on Submit instead of waiting on the server round trip. Owner is no longer hardcoded — chosen once per browser and saved locally, so this one file works for every owner and survives auto-updates. Added 19 casino/site matches found missing from the bookmarks bar (Midnight Reset, 24 Hour Timer, AutoCollect folders). Added a fortunewins.com balance entry (÷100 scaling) — fortunecoins.com redirects there, so the old entry never actually fired. The Auto Login & Collect feature (briefly bundled here in v1.61.0) was moved out to its own separate userscript, autocollect.user.js, so it can be enabled/disabled independently of this SC-tracking script. Both submission paths retry (up to 2 extra attempts with backoff) on a network error or timeout. Auto-submit's fixed 10s post-load delay is randomized 10-15s to spread out multiple tabs. Submissions now POST directly to the Google Form (bypassing the Apps Script Web App entirely for appends) — the Web App's per-request read/scan/write was the real source of the reported network errors, not just something to retry around. Growth control and "current balance" upkeep moved server-side to a scheduled Apps Script cleanup instead of a live per-submission upsert.
 // @author       Grok
 // @run-at       document-start
 // @match        https://play.babacasino.com/*
@@ -152,6 +152,88 @@
     'goldtreasurecasino.com','luckystake.com','app.icasino.com','www.yaycasino.com','www.zulacasino.com'
   ];
   const extraDelays = { 'www.zulacasino.com': 5000 };
+
+  // --- Google Form submission (with retry) ---
+  // Submissions POST straight to the Google Form's native /formResponse endpoint instead of
+  // the Apps Script Web App. The Web App's doPost had to open the spreadsheet, read the
+  // whole SC Status range, scan it in JS for a matching Casino+Owner row, then write —
+  // several sequential Sheets API calls on every single submission, which is what actually
+  // produced the "network errors on submission" reports (a slow/dropped custom script
+  // execution, not a flaky network). Google's own Forms→Sheets sync doesn't spin up a
+  // custom script per submission at all, so this removes that latency/failure surface
+  // entirely rather than just retrying around it. Growth control (Form Responses 1 no
+  // longer using an upsert to stay small) and "current balance" upkeep are now handled by
+  // a scheduled Apps Script cleanup instead — see the project doc's "bypass the web app for
+  // appending" section for the full design. The retry logic below is kept as a safety net
+  // for ordinary network hiccups, not because the Form endpoint is expected to be slow.
+  //
+  // IMPORTANT: this must be the real, sheet-linked form — see the project doc's "Resolved
+  // bug" section on a near-identical-looking published ID that was NOT connected to the
+  // sheet. Verify entry IDs from the live /viewform page's window.FB_PUBLIC_LOAD_DATA_ if
+  // this ever needs re-checking, never from the edit page.
+  const GOOGLE_FORM_URL = 'https://docs.google.com/forms/d/e/1FAIpQLSdqzM3_yrjrPozHBK5YFZgFayWy56QERUdeCin9-Z4RcVq3PA/formResponse';
+  const FORM_ENTRY_IDS = {
+    casino: 'entry.1381190588',
+    owner: 'entry.1653371439',
+    sc: 'entry.43343738',
+    action: 'entry.1780077614',
+    amount: 'entry.1230356501'
+  };
+  const FORM_RETRY_DELAYS_MS = [1500, 4000]; // 2 retries after the first try = 3 attempts total
+  const FORM_TIMEOUT_MS = 20000;
+
+  function buildFormPayload({ casino, owner, sc, action, amount }) {
+    return new URLSearchParams({
+      [FORM_ENTRY_IDS.casino]: casino,
+      [FORM_ENTRY_IDS.owner]: owner,
+      [FORM_ENTRY_IDS.sc]: sc,
+      [FORM_ENTRY_IDS.action]: action,
+      [FORM_ENTRY_IDS.amount]: amount
+    });
+  }
+
+  // submitToTracker(fields, { onSuccess, onFinalFailure }) — fields is the plain object
+  // passed to buildFormPayload. onSuccess gets the response, onFinalFailure gets a short
+  // human-readable reason string, only called after every retry is exhausted. Both
+  // callbacks are optional.
+  function submitToTracker(fields, { onSuccess, onFinalFailure } = {}) {
+    const payloadStr = buildFormPayload(fields).toString();
+    let attempt = 0;
+
+    function giveUpOrRetry(reason) {
+      if (attempt <= FORM_RETRY_DELAYS_MS.length) {
+        setTimeout(attemptOnce, FORM_RETRY_DELAYS_MS[attempt - 1]);
+      } else if (onFinalFailure) {
+        onFinalFailure(reason);
+      }
+    }
+
+    function attemptOnce() {
+      attempt++;
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: GOOGLE_FORM_URL,
+        data: payloadStr,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: FORM_TIMEOUT_MS,
+        onload: (response) => {
+          // Google Forms returns a full HTML confirmation page (not a plain "OK" like the
+          // old Web App did) containing this text on a genuine successful submission.
+          const success = response.status === 200 && /recorded/i.test(response.responseText || '');
+          if (success) {
+            if (onSuccess) onSuccess(response);
+          } else {
+            giveUpOrRetry(`status ${response.status}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
+          }
+        },
+        onerror: () => giveUpOrRetry(`network error${attempt > 1 ? ` (attempt ${attempt})` : ''}`),
+        ontimeout: () => giveUpOrRetry(`timed out after ${FORM_TIMEOUT_MS / 1000}s${attempt > 1 ? ` (attempt ${attempt})` : ''}`)
+      });
+    }
+
+    attemptOnce();
+  }
+  // --- End Google Form submission ---
 
   // Helpers
   const cleanNumber = (value) => {
@@ -1300,34 +1382,22 @@
       const casinoVal = casinoInput.value.trim();
       const hostnameVal = window.location.hostname;
       const scVal = scInput.value.trim();
-      const formData = new URLSearchParams({
-        'casino': casinoVal,
-        'owner': ownerInput.value.trim(),
-        'sc': scVal,
-        'action': actionSelect.value,
-        'amount': amountInput.value.trim()
-      });
-      // Close immediately — don't make the user wait on the network round trip to the
-      // Apps Script Web App (which does several sequential Sheets reads/writes per
-      // Purchase/Redeem submission and can take a few seconds). The POST still completes
-      // in the background; a failure still surfaces via alert() even though the form
-      // has already closed.
+      const ownerVal = ownerInput.value.trim();
+      const actionVal = actionSelect.value;
+      const amountVal = amountInput.value.trim();
+      // Close immediately — don't make the user wait on the network round trip. The POST
+      // still completes in the background (with automatic retries — see submitToTracker
+      // above); a failure still surfaces via alert() even though the form has already
+      // closed, but only once every retry has been exhausted.
       document.body.removeChild(container);
-      GM_xmlhttpRequest({
-        method:'POST',
-        url:'https://script.google.com/macros/s/AKfycbwNp9fJ0OmF3ywcCsv3l1qFeEWagk3TbTW0ih9idbC-pIPSDxuLF8d4Au5dry1oh-hV/exec',
-        data: formData.toString(),
-        headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
-        onload:(response)=>{
-          const success = response.status === 200 && /OK/.test(response.responseText || '');
-          if (success) {
-            GM_setValue(`lastSC_${hostnameVal}`, scVal);
-            GM_setValue(`lastSubmitTime_${hostnameVal}`, new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
-          } else {
-            alert(`Error submitting form for ${casinoVal}. Status: ${response.status}`);
-          }
+      submitToTracker({ casino: casinoVal, owner: ownerVal, sc: scVal, action: actionVal, amount: amountVal }, {
+        onSuccess: () => {
+          GM_setValue(`lastSC_${hostnameVal}`, scVal);
+          GM_setValue(`lastSubmitTime_${hostnameVal}`, new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
         },
-        onerror:()=>{ alert(`Network error submitting form for ${casinoVal}.`); }
+        onFinalFailure: (reason) => {
+          alert(`Error submitting form for ${casinoVal} after retrying: ${reason}.`);
+        }
       });
     };
     closeButton.onclick = () => { document.body.removeChild(container); };
@@ -1359,7 +1429,13 @@
   function tryAutoSubmit() {
     const hostname = window.location.hostname;
     if (noAutoSubmitSites.includes(hostname)) return;
-    const baseDelay = 10000;
+    // Randomized 10-15s instead of a flat 10s — when several tracked casino tabs are opened
+    // around the same time (e.g. working through a bookmarks folder), a fixed delay means
+    // they all fire their auto-submit POST in the same instant, which is exactly when the
+    // Web App is most likely to be under enough concurrent load to run slow. Spreading them
+    // out over a 5s window costs nothing (this path is invisible to the user either way) and
+    // reduces how often that pileup happens.
+    const baseDelay = 10000 + Math.floor(Math.random() * 5000);
     const extraDelay = extraDelays[hostname] || 0;
     const totalDelay = baseDelay + extraDelay;
     setTimeout(() => {
@@ -1369,24 +1445,13 @@
           if (numericValue > 2000) return;
           const lastSC = GM_getValue(`lastSC_${hostname}`, '');
           if (sc === lastSC) return; // unchanged since last recorded value for this casino — skip, don't log a duplicate row
-          const payload = new URLSearchParams({
-            'casino': hostname,
-            'owner': getOwner(),
-            'sc': sc,
-            'action': '',
-            'amount': ''
-          }).toString();
-          GM_xmlhttpRequest({
-            method:'POST',
-            url:'https://script.google.com/macros/s/AKfycbwNp9fJ0OmF3ywcCsv3l1qFeEWagk3TbTW0ih9idbC-pIPSDxuLF8d4Au5dry1oh-hV/exec',
-            data: payload,
-            headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
-            onload:(response)=>{
-              const success = response.status === 200 && /OK/.test(response.responseText || '');
-              if (success) {
-                GM_setValue(`lastSC_${hostname}`, sc);
-                GM_setValue(`lastSubmitTime_${hostname}`, new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
-              }
+          // No onFinalFailure here (unlike the manual form) — this is a silent background
+          // balance check; if all retries are exhausted it just tries again next page load,
+          // same as before. Alerting on every tab for a background check would be noisy.
+          submitToTracker({ casino: hostname, owner: getOwner(), sc: sc, action: '', amount: '' }, {
+            onSuccess: () => {
+              GM_setValue(`lastSC_${hostname}`, sc);
+              GM_setValue(`lastSubmitTime_${hostname}`, new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
             }
           });
         }
