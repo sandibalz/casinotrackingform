@@ -13,7 +13,7 @@
 // @match       https://luckparty.com/login*
 // @match       https://www.luckparty.com/login*
 // @grant       none
-// @version     3.7
+// @version     3.8
 // @description Waits for captcha to solve, then auto-clicks the correct login button for each casino. Shows an on-screen log so you can see it working.
 // @updateURL   https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
 // @downloadURL https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
@@ -256,23 +256,17 @@
                 uiLog("Custom login button not found/ready after retries.", true);
             }
         } else if (config.type === "password") {
-            // Password field is never touched (per feedback). Email/username still
-            // needs the wait-for-value + nudge treatment though — v3.6 skipped both and
-            // that's what caused the "required" validation error to pop on click: the
-            // field was still genuinely empty at that moment (confirmed by the v3.5
-            // diagnostic build), and clicking-then-blurring an empty field is exactly
-            // what triggers that error. Waiting for a real value first (this DOES land,
-            // just not always within ~8s) and using nudgeField's focus→set→events→blur
-            // sequence — the same recipe that fixed this in autocollect.user.js — avoids it.
-            const emailField = document.querySelector(config.emailSelector);
+            // Stripped down to just clicking Login — no field checks, no clicking into
+            // fields, nothing. A manual click worked with zero field interaction, which
+            // means the browser already has the real value at submit time; the field
+            // checks were solving a problem that didn't exist and just added failure modes.
             const btn = document.querySelector(config.loginButtonSelector);
 
-            if (!emailField || !btn) {
+            if (!btn) {
                 if (Date.now() < retryUntil) {
-                    uiLog("Waiting for the email field and Login button to appear...");
                     setTimeout(() => clickLoginButton(retryUntil), 300);
                 } else {
-                    uiLog("Email field or Login button never appeared.", true);
+                    uiLog("Login button never appeared.", true);
                 }
                 return;
             }
@@ -286,37 +280,23 @@
                 return;
             }
 
-            if (!emailField.value) {
-                if (Date.now() < retryUntil) {
-                    uiLog(`Waiting for saved email to autofill (currently ${emailField.value.length} chars)...`);
-                    setTimeout(() => clickLoginButton(retryUntil), 500);
-                } else {
-                    uiLog("Email never autofilled after 20s — log in manually this time.", true);
-                }
-                return;
+            const btnText = btn.innerText.trim();
+            // Case-insensitive: some sites CSS-uppercase the button (innerText
+            // reflects the rendered "LOGIN" even though the real text is "Login").
+            if (!config.loginButtonText || btnText.toLowerCase() === config.loginButtonText.toLowerCase()) {
+                uiLog("Clicking Login...");
+                humanClick(btn);
+                setTimeout(() => {
+                    if (/\/login/.test(location.pathname)) {
+                        uiLog("Still on login page after clicking Login — trying form submit as backup");
+                        submitViaForm(btn);
+                    }
+                }, 800);
+            } else if (Date.now() < retryUntil) {
+                setTimeout(() => clickLoginButton(retryUntil), 300);
+            } else {
+                uiLog(`Login button text mismatch: "${btnText}"`, true);
             }
-
-            uiLog(`Email detected (${emailField.value.length} chars) — clicking into it...`);
-            humanClick(emailField);
-            nudgeField(emailField);
-
-            setTimeout(() => {
-                const btnText = btn.innerText.trim();
-                // Case-insensitive: some sites CSS-uppercase the button (innerText
-                // reflects the rendered "LOGIN" even though the real text is "Login").
-                if (!config.loginButtonText || btnText.toLowerCase() === config.loginButtonText.toLowerCase()) {
-                    uiLog("Clicking Login...");
-                    humanClick(btn);
-                    setTimeout(() => {
-                        if (/\/login/.test(location.pathname)) {
-                            uiLog("Still on login page after clicking Login — trying form submit as backup");
-                            submitViaForm(btn);
-                        }
-                    }, 800);
-                } else {
-                    uiLog(`Login button text mismatch: "${btnText}"`, true);
-                }
-            }, 500);
         } else {
             const btn = findGoogleButton();
             if (btn) {
