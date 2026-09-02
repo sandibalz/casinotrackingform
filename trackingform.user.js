@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         Casino Google Form Input (Reliable + Lightweight)
 // @namespace    http://tampermonkey.net/
-// @version      1.65.0
+// @version      1.66.0
 // @description  Popup form to submit SC data to a Google Form; full per-site detection with centralized helpers; trimmed CSS; reduced polling overhead; consistent auto-submit. Element picker for custom SC selectors, plus an API/network (fetch/XHR/WebSocket) value picker that supports combining two separately-captured values (e.g. redeemable + non-redeemable SC) into one summed total. Form closes instantly on Submit instead of waiting on the server round trip. Owner is no longer hardcoded — chosen once per browser and saved locally, so this one file works for every owner and survives auto-updates. Added 19 casino/site matches found missing from the bookmarks bar (Midnight Reset, 24 Hour Timer, AutoCollect folders). Added a fortunewins.com balance entry (÷100 scaling) — fortunecoins.com redirects there, so the old entry never actually fired. The Auto Login & Collect feature (briefly bundled here in v1.61.0) was moved out to its own separate userscript, autocollect.user.js, so it can be enabled/disabled independently of this SC-tracking script. Both submission paths retry (up to 2 extra attempts with backoff) on a network error or timeout. Auto-submit's fixed 10s post-load delay is randomized 10-15s to spread out multiple tabs. Submissions now POST directly to the Google Form (bypassing the Apps Script Web App entirely for appends) — the Web App's per-request read/scan/write was the real source of the reported network errors, not just something to retry around. Growth control and "current balance" upkeep moved server-side to a scheduled Apps Script cleanup instead of a live per-submission upsert. The form, trigger buttons, and API picker now survive being wiped by a site's own SPA re-render shortly after they're injected (reported on myprize.us: form flashes then disappears) — they re-attach themselves automatically unless closed on purpose.
 // @author       Grok
 // @run-at       document-start
+// @match        https://play.winbonanza.com/*
+// @match        https://play.thrillcoins.com/*
 // @match        https://play.babacasino.com/*
 // @match        https://lobby.chumbacasino.com/*
 // @match        https://play.clubs.poker/*
