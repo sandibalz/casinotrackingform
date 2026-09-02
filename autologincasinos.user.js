@@ -13,7 +13,7 @@
 // @match       https://luckparty.com/login*
 // @match       https://www.luckparty.com/login*
 // @grant       none
-// @version     3.3
+// @version     3.4
 // @description Waits for captcha to solve, then auto-clicks the correct login button for each casino. Shows an on-screen log so you can see it working.
 // @updateURL   https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
 // @downloadURL https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
@@ -303,7 +303,9 @@
                     return;
                 }
                 const btnText = btn.innerText.trim();
-                if (!config.loginButtonText || btnText === config.loginButtonText) {
+                // Case-insensitive: some sites CSS-uppercase the button (innerText
+                // reflects the rendered "LOGIN" even though the real text is "Login").
+                if (!config.loginButtonText || btnText.toLowerCase() === config.loginButtonText.toLowerCase()) {
                     uiLog("Clicking Login...");
                     humanClick(btn);
                     setTimeout(() => {
