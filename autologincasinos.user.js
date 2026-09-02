@@ -13,7 +13,7 @@
 // @match       https://luckparty.com/login*
 // @match       https://www.luckparty.com/login*
 // @grant       none
-// @version     3.9
+// @version     4.0
 // @description Waits for captcha to solve, then auto-clicks the correct login button for each casino. Shows an on-screen log so you can see it working.
 // @updateURL   https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
 // @downloadURL https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
@@ -210,6 +210,43 @@
         el.blur();
     }
 
+    // ---- Catch Chrome autofill the instant it happens --------------------------
+    // Theory (based on autocollect having worked, and this site consistently reading
+    // 0 chars no matter how long we wait): this site's React likely resets the field
+    // back to "" on its next render after Chrome autofills it, because React never saw
+    // an input/change event for that write. By the time we check — well into the
+    // CAPTCHA wait — that reset has already happened. Chrome adds a CSS animation hook
+    // (`:-webkit-autofill`) at the exact moment it autofills a field, which fires a
+    // real `animationstart` event we can listen for — catching that lets us nudge in
+    // the same tick, before any later render has a chance to wipe it out again.
+    function watchForAutofill(config) {
+        if (!document.getElementById('autologin-autofill-detect-style')) {
+            const style = document.createElement('style');
+            style.id = 'autologin-autofill-detect-style';
+            style.textContent = '@keyframes autologinAutofillDetect { from {} to {} } ' +
+                'input:-webkit-autofill { animation-name: autologinAutofillDetect; animation-duration: 0.001s; }';
+            document.documentElement.appendChild(style);
+        }
+
+        const attached = new WeakSet();
+        function attachTo(el) {
+            if (!el || attached.has(el)) return;
+            attached.add(el);
+            el.addEventListener('animationstart', (e) => {
+                if (e.animationName === 'autologinAutofillDetect') {
+                    uiLog(`Autofill event caught on ${el.id || el.name || 'a field'} — nudging immediately.`);
+                    nudgeField(el);
+                }
+            });
+        }
+
+        const attachInterval = setInterval(() => {
+            attachTo(pickVisible(config.emailSelector));
+            attachTo(pickVisible(config.passwordSelector));
+        }, 300);
+        // Login pages are short-lived — no real need to ever clear this.
+    }
+
     function submitViaForm(btn) {
         const form = btn.closest('form');
         if (form && typeof form.requestSubmit === 'function') {
@@ -352,6 +389,14 @@
             uiLog("Captcha signal timed out after 30s — attempting login anyway.", true);
             clickLoginButton();
         }, 30000);
+    }
+
+    // Start watching for autofill immediately — don't wait for the CAPTCHA-solved
+    // signal, since the whole point is catching the moment Chrome fills the field,
+    // which can easily happen before the CAPTCHA is even solved.
+    const startupConfig = getSiteConfig();
+    if (startupConfig && startupConfig.type === "password") {
+        watchForAutofill(startupConfig);
     }
 
     waitForCaptchaSolved();
