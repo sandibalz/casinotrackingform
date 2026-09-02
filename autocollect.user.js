@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Auto Login & Collect (Casino Sites)
 // @namespace    http://tampermonkey.net/
-// @version      1.2.0
-// @description  Per-site, click-to-teach automation: optionally click into saved login fields first (forces sites that ignore browser autofill to notice the values), click Login, pause 10s (for a CAPTCHA you solve by hand — this script never tries to detect or solve one itself), poll for popups + Collect (buttons that aren't there yet or ever) using a saved selector with a text/attribute-based fallback if the selector stops matching, and show a persistent on-screen log of what actually happened. Runs everywhere but is a complete no-op until you teach it on a given site. Separate from the SC-tracking script so it can be enabled/disabled independently.
+// @version      1.3.0
+// @description  Per-site, click-to-teach automation: waits 10s doing nothing first (for a CAPTCHA you solve by hand — this script never tries to detect or solve one itself), then clicks into saved login fields (forces sites that ignore browser autofill to notice the values), clicks Login, and polls for popups + Collect (buttons that aren't there yet or ever) using a saved selector with a text/attribute-based fallback if the selector stops matching — including inside same-origin iframes, since a close/collect button living in a widget iframe is a common reason it can't be found. Shows a persistent on-screen log of what actually happened. Runs everywhere but is a complete no-op until you teach it on a given site. Separate from the SC-tracking script so it can be enabled/disabled independently.
 // @author       Grok
 // @run-at       document-idle
 // @match        https://*/*
@@ -46,7 +46,8 @@
     }
     const parts = [];
     let current = el;
-    while (current && current !== document.body && parts.length < 5) {
+    const rootBody = (el.ownerDocument && el.ownerDocument.body) || document.body;
+    while (current && current !== rootBody && parts.length < 5) {
       let seg = current.tagName.toLowerCase();
       if (current.id) {
         parts.unshift(`#${CSS.escape(current.id)}`);
@@ -73,8 +74,66 @@
     return parts.join(' > ');
   }
 
+  // ── Iframe traversal ─────────────────────────────────────────────────────────
+  // A close/collect button can sit inside an <iframe> (a widget or modal loaded as its own
+  // page), and document.querySelector/elementFromPoint never look inside one — they only
+  // ever see the document they're called on. Same-origin iframes can be reached via
+  // .contentDocument; cross-origin ones throw a SecurityError on that access and there is no
+  // way around that from here — the browser enforces it. These helpers walk into every
+  // same-origin iframe (recursively, for an iframe-inside-an-iframe) and keep a list of any
+  // cross-origin ones they had to give up on, so a failure can at least explain why.
+  function collectFrameDocuments(root, docsOut, blockedOut) {
+    docsOut.push(root);
+    let iframes;
+    try { iframes = root.querySelectorAll('iframe'); } catch (_) { return; }
+    for (const f of iframes) {
+      let doc = null;
+      try { doc = f.contentDocument; } catch (_) { doc = null; }
+      if (doc) {
+        collectFrameDocuments(doc, docsOut, blockedOut);
+      } else {
+        blockedOut.push(f);
+      }
+    }
+  }
+
+  // Chain of <iframe> elements from doc's window up to (not including) the top window —
+  // used to translate a same-origin iframe's own local coordinates into top-document
+  // coordinates for drawing the picker's highlight box.
+  function getFrameChain(doc) {
+    const chain = [];
+    let win;
+    try { win = doc.defaultView; } catch (_) { return chain; }
+    while (win && win !== window.top) {
+      let fe = null;
+      try { fe = win.frameElement; } catch (_) { fe = null; }
+      if (!fe) break;
+      chain.unshift(fe);
+      win = win.parent;
+    }
+    return chain;
+  }
+
+  function absoluteRectFor(el) {
+    const rect = el.getBoundingClientRect();
+    let top = rect.top, left = rect.left;
+    for (const fe of getFrameChain(el.ownerDocument)) {
+      const fr = fe.getBoundingClientRect();
+      top += fr.top;
+      left += fr.left;
+    }
+    return { top, left, width: rect.width, height: rect.height };
+  }
+
   // Minimal click-to-pick: highlights the hovered element, and on click hands the generated
-  // selector back via onPicked(selector). Escape cancels.
+  // selector back via onPicked(selector, el). Escape cancels.
+  //
+  // Listens on the top document AND on every reachable same-origin iframe document, not just
+  // the top one — a mousemove/click that happens inside an iframe never bubbles out to the
+  // parent document's listeners (that's enforced by the browser, same-origin or not), so a
+  // single top-level listener can never see a hover/click that lands inside one. Any
+  // cross-origin iframe still can't be reached at all — nothing under the picker can change
+  // that — so its contents just can't be picked directly.
   function pickElementGeneric(onPicked, onCancel) {
     const highlight = document.createElement('div');
     Object.assign(highlight.style, {
@@ -97,24 +156,28 @@
 
     const onMove = (e) => {
       if (!active) return;
-      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const el = e.target;
       if (!el || el === highlight || el === tooltip) return;
-      const rect = el.getBoundingClientRect();
+      const rect = absoluteRectFor(el);
       Object.assign(highlight.style, {
         display: 'block', top: rect.top + 'px', left: rect.left + 'px',
         width: rect.width + 'px', height: rect.height + 'px'
       });
-      const text = el.textContent.trim().substring(0, 60);
+      const text = (el.textContent || '').trim().substring(0, 60);
       const tag = el.tagName.toLowerCase();
-      tooltip.textContent = `<${tag}> "${text}"`;
+      tooltip.textContent = el.ownerDocument !== document ? `<${tag}> "${text}" (in iframe)` : `<${tag}> "${text}"`;
       Object.assign(tooltip.style, { display: 'block', top: (rect.top - 30) + 'px', left: rect.left + 'px' });
     };
 
     const cleanup = () => {
       active = false;
-      document.removeEventListener('mousemove', onMove, true);
-      document.removeEventListener('click', onClick, true);
-      document.removeEventListener('keydown', onKey, true);
+      for (const doc of pickableDocs) {
+        try {
+          doc.removeEventListener('mousemove', onMove, true);
+          doc.removeEventListener('click', onClick, true);
+          doc.removeEventListener('keydown', onKey, true);
+        } catch (_) { /* frame may have navigated away mid-pick */ }
+      }
       highlight.remove();
       tooltip.remove();
     };
@@ -124,7 +187,7 @@
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
-      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const el = e.target;
       if (!el || el === highlight || el === tooltip) return;
       const selector = generateSelector(el);
       cleanup();
@@ -135,9 +198,17 @@
       if (e.key === 'Escape') { cleanup(); if (onCancel) onCancel(); }
     };
 
-    document.addEventListener('mousemove', onMove, true);
-    document.addEventListener('click', onClick, true);
-    document.addEventListener('keydown', onKey, true);
+    const pickableDocs = [];
+    const blockedFrames = [];
+    collectFrameDocuments(document, pickableDocs, blockedFrames);
+    for (const doc of pickableDocs) {
+      doc.addEventListener('mousemove', onMove, true);
+      doc.addEventListener('click', onClick, true);
+      doc.addEventListener('keydown', onKey, true);
+    }
+    if (blockedFrames.length) {
+      logLine(`ℹ️ Picker: ${blockedFrames.length} iframe(s) on this page are cross-origin — anything inside those can't be picked directly.`);
+    }
   }
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -320,10 +391,10 @@
     };
   }
 
-  function findByHelper(helper) {
+  function findByHelperIn(root, helper) {
     if (!helper) return null;
     if (helper.kind === 'field') {
-      const candidates = Array.from(document.querySelectorAll('input, textarea, select'));
+      const candidates = Array.from(root.querySelectorAll('input, textarea, select'));
       if (helper.autocomplete) {
         const m = candidates.find(el => (el.autocomplete || '').toLowerCase() === helper.autocomplete.toLowerCase());
         if (m) return m;
@@ -347,7 +418,7 @@
       return null;
     }
     if (!helper.text) return null;
-    const candidates = document.querySelectorAll('button, a, [role="button"], .btn, .button');
+    const candidates = root.querySelectorAll('button, a, [role="button"], .btn, .button');
     const norm = helper.text.toLowerCase();
     const normText = (el) => (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
     for (const el of candidates) {
@@ -358,6 +429,33 @@
       if (t && (t.includes(norm) || norm.includes(t))) return el;
     }
     return null;
+  }
+
+  // ── Cross-frame lookups ──────────────────────────────────────────────────────
+  // Same rationale as the picker above: a taught selector/helper is checked against the top
+  // document first, then against every reachable same-origin iframe document in turn (a
+  // close/collect button living inside a widget iframe is the most likely reason a taught
+  // target stops being found). blockedFrameCount tells the caller how many iframes couldn't
+  // be looked into at all (cross-origin), so a failure can say why instead of just "not found".
+  function queryDeep(selector) {
+    const docs = [], blocked = [];
+    collectFrameDocuments(document, docs, blocked);
+    for (const d of docs) {
+      let el = null;
+      try { el = d.querySelector(selector); } catch (_) { el = null; }
+      if (el) return { el, blockedFrameCount: blocked.length };
+    }
+    return { el: null, blockedFrameCount: blocked.length };
+  }
+
+  function findByHelperDeep(helper) {
+    const docs = [], blocked = [];
+    collectFrameDocuments(document, docs, blocked);
+    for (const d of docs) {
+      const el = findByHelperIn(d, helper);
+      if (el) return { el, blockedFrameCount: blocked.length };
+    }
+    return { el: null, blockedFrameCount: blocked.length };
   }
 
   function labelFor(x) {
@@ -386,22 +484,29 @@
     const start = Date.now();
     let el = null;
     let usedFallback = false;
+    let blockedFrameCount = 0;
     while (Date.now() - start < timeoutMs) {
       el = null;
       if (t.selector) {
-        try { el = document.querySelector(t.selector); } catch (e) { el = null; }
+        const r = queryDeep(t.selector);
+        blockedFrameCount = r.blockedFrameCount;
+        if (r.el) el = r.el;
       }
       if ((!el || !looksClickable(el)) && t.helper) {
-        const fb = findByHelper(t.helper);
-        if (fb && looksClickable(fb)) { el = fb; usedFallback = true; }
+        const r = findByHelperDeep(t.helper);
+        blockedFrameCount = r.blockedFrameCount;
+        if (r.el && looksClickable(r.el)) { el = r.el; usedFallback = true; }
       }
       if (el && looksClickable(el)) break;
       el = null;
       await sleep(intervalMs);
     }
     if (!el) {
-      const how = t.helper ? ' (tried the saved selector and a text/attribute fallback)' : '';
+      const how = t.helper ? ' (tried the saved selector and a text/attribute fallback, including same-origin iframes)' : ' (including same-origin iframes)';
       logLine(`⚠️ ${label} not found/clickable within ${Math.round(timeoutMs / 1000)}s${how}`);
+      if (blockedFrameCount) {
+        logLine(`ℹ️ Heads up: this page has ${blockedFrameCount} cross-origin iframe(s) I can't see inside — if ${label} lives in one of those, this script can't reach it directly from here.`);
+      }
       return false;
     }
     if (usedFallback) {
@@ -413,8 +518,7 @@
       robustClick(el);
       logLine(`🖱 Clicked ${label}${attempt > 1 ? ' (retry)' : ''}`);
       await sleep(900);
-      const stillThere = document.contains(el);
-      const changed = !stillThere || el.disabled !== before.disabled || (el.textContent || '').trim() !== before.text;
+      const changed = !el.isConnected || el.disabled !== before.disabled || (el.textContent || '').trim() !== before.text;
       if (changed) return true;
       if (attempt === 2) {
         logLine(`⚠️ ${label} was clicked but nothing on the page changed — the click may not have registered. You may need to click it by hand.`);
@@ -432,6 +536,13 @@
 
     logLine(`▶ Starting run on ${hostname}${manual ? ' (manual)' : ' (auto)'}`);
 
+    // Fixed 10s pause — deliberately the very first thing the flow does, before touching
+    // login fields or Login at all. A CAPTCHA can show up the moment the page loads, before
+    // you've clicked anything, and any click during that window can interfere with solving
+    // it by hand. This script never tries to detect or bypass a CAPTCHA itself.
+    logLine('⏳ Waiting 10s before doing anything (gives a CAPTCHA time to appear/be solved)…');
+    await sleep(10000);
+
     // Click into any saved login fields (username, password, ...) BEFORE clicking Login.
     // Some sites visually show the browser's saved autofill but don't register it internally
     // until the field is actually focused/interacted with — see nudgeField() above.
@@ -440,11 +551,12 @@
       let el = null;
       let usedFallback = false;
       if (t.selector) {
-        try { el = document.querySelector(t.selector); } catch (e) { el = null; }
+        const r = queryDeep(t.selector);
+        if (r.el) el = r.el;
       }
       if (!el && t.helper) {
-        el = findByHelper(t.helper);
-        if (el) usedFallback = true;
+        const r = findByHelperDeep(t.helper);
+        if (r.el) { el = r.el; usedFallback = true; }
       }
       if (el) {
         nudgeField(el);
@@ -456,12 +568,6 @@
     }
 
     await waitAndClick(config.loginSelector, 'Login button', { timeoutMs: 5000, intervalMs: 500 });
-
-    // Fixed 10s pause before continuing — gives the page time to actually log in, and gives
-    // you a window to solve a CAPTCHA or confirm the login by hand. This script never tries
-    // to detect or bypass a CAPTCHA itself.
-    logLine('⏳ Waiting 10s for login/CAPTCHA…');
-    await sleep(10000);
 
     // Popup-close buttons: poll for each — a given popup isn't always the one that shows up
     // on any particular run, so a fixed one-shot check misses it more often than not.
@@ -514,7 +620,7 @@
 
     const hint = document.createElement('div');
     hint.className = 'ac-hint';
-    hint.textContent = `For ${hostname}. If this site doesn't seem to notice your saved username/password until you click into each field yourself, add them below (click username, then password) — the automation will click into them first. Then teach it which buttons to click: Login, then (optionally) any popup/ad close buttons, then Collect. After Login it always pauses 10 seconds for a CAPTCHA or to confirm the login by hand, then polls for popups and Collect since they aren't always there right away.`;
+    hint.textContent = `For ${hostname}. It always waits 10 seconds before touching anything, in case a CAPTCHA needs solving by hand. If this site doesn't seem to notice your saved username/password until you click into each field yourself, add them below (click username, then password) — the automation will click into them first. Then teach it which buttons to click: Login, then (optionally) any popup/ad close buttons, then Collect. Popups and Collect are polled for, since they aren't always there right away. Buttons inside a same-origin iframe can be picked normally; a cross-origin iframe's contents can't be reached at all, and picking will say so.`;
     modal.appendChild(hint);
 
     let config = getConfig(hostname) || { loginSelector: '', popupCloseSelectors: [], collectSelector: '', preLoginSelectors: [], enabled: false };
@@ -598,6 +704,16 @@
       saveConfig(hostname, config);
     });
 
+    // If the picker couldn't drill past an <iframe> (only possible for a cross-origin one —
+    // a same-origin iframe's contents are picked directly, see pickElementGeneric), the thing
+    // that actually got saved is the outer iframe itself, which won't do anything useful when
+    // clicked. Say so immediately rather than let it silently fail at run time.
+    function iframeWarning(el) {
+      return el.tagName === 'IFRAME'
+        ? ' ⚠️ That’s the outer <iframe>, not something inside it — this one is cross-origin, so the script can’t reach into it directly.'
+        : '';
+    }
+
     fieldBtn.onclick = () => {
       container.style.display = 'none';
       status.textContent = 'Click a login field on the page (e.g. username, then run this again for password)...';
@@ -606,7 +722,7 @@
         config.preLoginSelectors.push({ selector, helper: describeElement(el) });
         saveConfig(hostname, config);
         container.style.display = '';
-        status.textContent = `✅ Login field #${config.preLoginSelectors.length} saved.`;
+        status.textContent = `✅ Login field #${config.preLoginSelectors.length} saved.${iframeWarning(el)}`;
         render();
       }, () => { container.style.display = ''; status.textContent = 'Cancelled.'; });
     };
@@ -618,7 +734,7 @@
         config.loginSelector = { selector, helper: describeElement(el) };
         saveConfig(hostname, config);
         container.style.display = '';
-        status.textContent = '✅ Login button saved.';
+        status.textContent = `✅ Login button saved.${iframeWarning(el)}`;
         render();
       }, () => { container.style.display = ''; status.textContent = 'Cancelled.'; });
     };
@@ -631,7 +747,7 @@
         config.popupCloseSelectors.push({ selector, helper: describeElement(el) });
         saveConfig(hostname, config);
         container.style.display = '';
-        status.textContent = `✅ Popup-close button #${config.popupCloseSelectors.length} saved.`;
+        status.textContent = `✅ Popup-close button #${config.popupCloseSelectors.length} saved.${iframeWarning(el)}`;
         render();
       }, () => { container.style.display = ''; status.textContent = 'Cancelled.'; });
     };
@@ -643,7 +759,7 @@
         config.collectSelector = { selector, helper: describeElement(el) };
         saveConfig(hostname, config);
         container.style.display = '';
-        status.textContent = '✅ Collect button saved.';
+        status.textContent = `✅ Collect button saved.${iframeWarning(el)}`;
         render();
       }, () => { container.style.display = ''; status.textContent = 'Cancelled.'; });
     };
