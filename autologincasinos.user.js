@@ -13,7 +13,7 @@
 // @match       https://luckparty.com/login*
 // @match       https://www.luckparty.com/login*
 // @grant       none
-// @version     3.8
+// @version     3.9
 // @description Waits for captcha to solve, then auto-clicks the correct login button for each casino. Shows an on-screen log so you can see it working.
 // @updateURL   https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
 // @downloadURL https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
@@ -60,6 +60,22 @@
             if (host.includes(domain)) return SITE_MAP[domain];
         }
         return null;
+    }
+
+    function isVisible(el) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) return false;
+        const style = getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+    }
+
+    // Some pages have more than one element sharing an id (invalid HTML, but browsers
+    // tolerate it) — a plain querySelector silently returns whichever is first in the
+    // DOM, which can be a hidden decoy that always reads as empty. Prefer the first
+    // actually-visible match instead.
+    function pickVisible(selector) {
+        const all = Array.from(document.querySelectorAll(selector));
+        return all.find(isVisible) || all[0] || null;
     }
 
     // ---- On-screen log panel -------------------------------------------------
@@ -256,17 +272,20 @@
                 uiLog("Custom login button not found/ready after retries.", true);
             }
         } else if (config.type === "password") {
-            // Stripped down to just clicking Login — no field checks, no clicking into
-            // fields, nothing. A manual click worked with zero field interaction, which
-            // means the browser already has the real value at submit time; the field
-            // checks were solving a problem that didn't exist and just added failure modes.
+            // The "required" error is React's own validation state, not the raw DOM
+            // value — the real fix is nudgeField (native setter + input/change), the
+            // same recipe that already worked for this exact symptom in autocollect.
+            // Also use pickVisible in case the page has a hidden duplicate of the field
+            // id that a plain querySelector could silently grab instead of the real one.
+            const emailField = pickVisible(config.emailSelector);
+            const passwordField = pickVisible(config.passwordSelector);
             const btn = document.querySelector(config.loginButtonSelector);
 
-            if (!btn) {
+            if (!emailField || !passwordField || !btn) {
                 if (Date.now() < retryUntil) {
                     setTimeout(() => clickLoginButton(retryUntil), 300);
                 } else {
-                    uiLog("Login button never appeared.", true);
+                    uiLog("Email/password fields or Login button never appeared.", true);
                 }
                 return;
             }
@@ -280,23 +299,29 @@
                 return;
             }
 
-            const btnText = btn.innerText.trim();
-            // Case-insensitive: some sites CSS-uppercase the button (innerText
-            // reflects the rendered "LOGIN" even though the real text is "Login").
-            if (!config.loginButtonText || btnText.toLowerCase() === config.loginButtonText.toLowerCase()) {
-                uiLog("Clicking Login...");
-                humanClick(btn);
-                setTimeout(() => {
-                    if (/\/login/.test(location.pathname)) {
-                        uiLog("Still on login page after clicking Login — trying form submit as backup");
-                        submitViaForm(btn);
-                    }
-                }, 800);
-            } else if (Date.now() < retryUntil) {
-                setTimeout(() => clickLoginButton(retryUntil), 300);
-            } else {
-                uiLog(`Login button text mismatch: "${btnText}"`, true);
-            }
+            uiLog(`Nudging email/password (sees ${emailField.value.length} / ${passwordField.value.length} chars)...`);
+            nudgeField(emailField);
+            nudgeField(passwordField);
+
+            setTimeout(() => {
+                const btnText = btn.innerText.trim();
+                // Case-insensitive: some sites CSS-uppercase the button (innerText
+                // reflects the rendered "LOGIN" even though the real text is "Login").
+                if (!config.loginButtonText || btnText.toLowerCase() === config.loginButtonText.toLowerCase()) {
+                    uiLog("Clicking Login...");
+                    humanClick(btn);
+                    setTimeout(() => {
+                        if (/\/login/.test(location.pathname)) {
+                            uiLog("Still on login page after clicking Login — trying form submit as backup");
+                            submitViaForm(btn);
+                        }
+                    }, 800);
+                } else if (Date.now() < retryUntil) {
+                    setTimeout(() => clickLoginButton(retryUntil), 300);
+                } else {
+                    uiLog(`Login button text mismatch: "${btnText}"`, true);
+                }
+            }, 300);
         } else {
             const btn = findGoogleButton();
             if (btn) {
