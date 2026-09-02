@@ -13,7 +13,7 @@
 // @match       https://luckparty.com/login*
 // @match       https://www.luckparty.com/login*
 // @grant       none
-// @version     3.1
+// @version     3.2
 // @description Waits for captcha to solve, then auto-clicks the correct login button for each casino.
 // @updateURL   https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
 // @downloadURL https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/autologincasinos.user.js
@@ -43,7 +43,15 @@
         "zulacasino.com":   { type: "google" },
         "fortunecoins.com": { type: "google" },
         "fortunewins.com":  { type: "google" },
-        "luckparty.com":    { type: "google" }
+        "luckparty.com": {
+            type: "password",
+            // Real username/password form, not Google SSO. Explicit id selectors so we
+            // never touch the separate "LOGIN WITH AN EMAIL LINK" magic-link button.
+            emailSelector: '#field-email',
+            passwordSelector: '#field-password',
+            loginButtonSelector: 'button.login-btn[type="submit"]',
+            loginButtonText: "Login"
+        }
     };
 
     function getSiteConfig() {
@@ -109,6 +117,19 @@
         return true;
     }
 
+    function nudgeField(el) {
+        // Autofilled/saved values don't always fire the input/change events a site's
+        // own JS listens for, so it can treat the field as "empty" until a real click
+        // touches it. Re-set the value via the native setter (bypasses any framework
+        // override) and fire input/change so the site's state catches up.
+        if (!el) return;
+        const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (setter) setter.call(el, el.value);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
     function submitViaForm(btn) {
         const form = btn.closest('form');
         if (form && typeof form.requestSubmit === 'function') {
@@ -169,6 +190,43 @@
                 setTimeout(() => clickLoginButton(retryUntil), 300);
             } else {
                 console.log("Custom login button not found/ready after retries.");
+            }
+        } else if (config.type === "password") {
+            const emailField = document.querySelector(config.emailSelector);
+            const passwordField = document.querySelector(config.passwordSelector);
+            const btn = document.querySelector(config.loginButtonSelector);
+
+            if (emailField && passwordField && btn && !btn.disabled) {
+                // Click into each field first — saved/autofilled values don't always
+                // register with the site's own JS until a real click touches the field.
+                humanClick(emailField);
+                nudgeField(emailField);
+                humanClick(passwordField);
+                nudgeField(passwordField);
+
+                setTimeout(() => {
+                    const btnText = btn.innerText.trim();
+                    if (!config.loginButtonText || btnText === config.loginButtonText) {
+                        humanClick(btn);
+                        console.log(`humanClick used for ${location.hostname} (password login)`);
+                        setTimeout(() => {
+                            if (/\/login/.test(location.pathname)) {
+                                console.log("Still on login page after humanClick — trying form submit as backup");
+                                submitViaForm(btn);
+                            }
+                        }, 800);
+                    } else {
+                        console.log(`Login button text mismatch for ${location.hostname}: "${btnText}"`);
+                    }
+                }, 200);
+                return;
+            }
+
+            if (Date.now() < retryUntil) {
+                console.log("Password login fields/button not ready yet, retrying...");
+                setTimeout(() => clickLoginButton(retryUntil), 300);
+            } else {
+                console.log("Password login fields/button not found after retries.");
             }
         } else {
             const btn = findGoogleButton();
