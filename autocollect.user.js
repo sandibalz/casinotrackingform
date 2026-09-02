@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Auto Login & Collect (Casino Sites)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
-// @description  Per-site, click-to-teach automation: click Login, pause 10s (for saved-password autofill / a CAPTCHA you solve by hand — this script never tries to detect or solve one itself), close any popups, then click Collect. Runs everywhere but is a complete no-op until you teach it on a given site. Separate from the SC-tracking script so it can be enabled/disabled independently.
+// @version      1.1.0
+// @description  Per-site, click-to-teach automation: optionally click into saved login fields first (forces sites that ignore browser autofill to notice the values), click Login, pause 10s (for a CAPTCHA you solve by hand — this script never tries to detect or solve one itself), poll for popups + Collect (buttons that aren't there yet or ever), and show a persistent on-screen log of what actually happened. Runs everywhere but is a complete no-op until you teach it on a given site. Separate from the SC-tracking script so it can be enabled/disabled independently.
 // @author       Grok
 // @run-at       document-idle
 // @match        https://*/*
@@ -140,60 +140,238 @@
     document.addEventListener('keydown', onKey, true);
   }
 
-  function showToast(lines) {
-    const toast = document.createElement('div');
-    const shadow = toast.attachShadow({ mode: 'open' });
-    Object.assign(toast.style, {
-      position: 'fixed', bottom: '70px', right: '10px', zIndex: '1000000', maxWidth: '320px'
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  // ── Persistent on-screen log ────────────────────────────────────────────────
+  // A live, stays-put log of what the flow actually did, instead of a toast that vanishes
+  // in a few seconds. Lives in a shadow DOM (page CSS can't hide it) anchored to <html>
+  // (some sites clip position:fixed children of <body>), with a max z-index, and re-attaches
+  // itself if a page re-render carries it off. Has a Copy button so you can paste the run
+  // back to report a problem.
+  let logHost = null;
+  let logBody = null;
+
+  function ensureLogPanel() {
+    if (logHost && document.documentElement.contains(logHost)) return logBody;
+
+    logHost = document.createElement('div');
+    logHost.id = 'ac-log-host';
+    Object.assign(logHost.style, {
+      position: 'fixed', bottom: '10px', right: '10px', zIndex: '2147483647',
+      width: '360px', maxWidth: '92vw', pointerEvents: 'auto'
     });
+    const shadow = logHost.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = `
-      .toast { all: initial; font: 12px/1.4 Arial, Helvetica, sans-serif; display:block;
-        background:#222; color:#fff; padding:10px 12px; border-radius:6px;
-        box-shadow:0 4px 8px rgba(0,0,0,0.3); white-space:pre-line; }
+      .ac-log { all: initial; display:block; font: 11px/1.4 Consolas, Menlo, monospace;
+        background:#111; color:#ddd; border:1px solid #444; border-radius:6px;
+        box-shadow:0 4px 12px rgba(0,0,0,0.4); }
+      .ac-log-head { all: initial; box-sizing:border-box; display:flex; align-items:center;
+        justify-content:space-between; width:100%; font: bold 12px/1.4 Arial, Helvetica, sans-serif;
+        color:#fff; background:#222; padding:6px 8px; border-radius:5px 5px 0 0; }
+      .ac-log-head .ac-btns { display:flex; gap:4px; }
+      .ac-log-head button { all: unset; box-sizing:border-box; cursor:pointer; padding:2px 7px;
+        background:#444; color:#fff; border-radius:3px; font: 11px/1.4 Arial, Helvetica, sans-serif; }
+      .ac-log-head button:hover { background:#555; }
+      .ac-log-body { max-height:240px; overflow-y:auto; padding:8px; white-space:pre-wrap; word-break:break-word; }
+      .ac-log-line { margin-bottom:3px; }
     `;
     shadow.appendChild(style);
+
     const box = document.createElement('div');
-    box.className = 'toast';
-    box.textContent = '🤖 Auto-Collect:\n' + lines.join('\n');
+    box.className = 'ac-log';
+    const head = document.createElement('div');
+    head.className = 'ac-log-head';
+    const title = document.createElement('span');
+    title.textContent = '🤖 Auto-Collect log';
+    const btns = document.createElement('div');
+    btns.className = 'ac-btns';
+    const copyBtn = document.createElement('button');
+    copyBtn.textContent = 'Copy';
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    btns.appendChild(copyBtn);
+    btns.appendChild(closeBtn);
+    head.appendChild(title);
+    head.appendChild(btns);
+
+    const body = document.createElement('div');
+    body.className = 'ac-log-body';
+
+    box.appendChild(head);
+    box.appendChild(body);
     shadow.appendChild(box);
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 8000);
+
+    copyBtn.onclick = () => {
+      const text = Array.from(body.children).map(l => l.textContent).join('\n');
+      const done = () => { copyBtn.textContent = 'Copied!'; setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+      } else {
+        fallbackCopy(text, done);
+      }
+    };
+    function fallbackCopy(text, done) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+        done();
+      } catch (_) { /* clipboard blocked on this site — nothing more we can do */ }
+    }
+    closeBtn.onclick = () => { logHost.remove(); logHost = null; logBody = null; };
+
+    (document.documentElement || document.body).appendChild(logHost);
+    logBody = body;
+    return logBody;
+  }
+
+  function logLine(msg) {
+    const body = ensureLogPanel();
+    const line = document.createElement('div');
+    line.className = 'ac-log-line';
+    line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    body.appendChild(line);
+    body.scrollTop = body.scrollHeight;
+    console.log(`[AutoCollect] ${msg}`);
+  }
+
+  // ── Click helpers ────────────────────────────────────────────────────────────
+
+  // Full pointer + mouse sequence — React (and similar) widgets often ignore a bare .click().
+  function robustClick(el) {
+    const opts = { bubbles: true, cancelable: true, view: window };
+    try {
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+      el.dispatchEvent(new MouseEvent('mousedown', opts));
+      el.dispatchEvent(new PointerEvent('pointerup', opts));
+      el.dispatchEvent(new MouseEvent('mouseup', opts));
+      el.dispatchEvent(new MouseEvent('click', opts));
+    } catch (_) {
+      try { el.click(); } catch (__) {}
+    }
+  }
+
+  // Forces a framework (React, etc.) that tracks its own internal form state to notice a
+  // value the browser's saved-password autofill set directly on the DOM — autofill doesn't
+  // go through the framework's normal typing/input handling, so its internal state can stay
+  // "empty" even though the field visually shows the saved value, and Login then reads that
+  // stale internal state and treats the field as blank. Re-setting .value through the native
+  // property setter and firing a real 'input'/'change' event (the standard trick for this)
+  // makes the framework pick it up, the same way actually clicking into the field by hand
+  // (as a workaround) does.
+  function nudgeField(el) {
+    try {
+      el.focus();
+      const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+      const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value') && Object.getOwnPropertyDescriptor(proto, 'value').set;
+      if (nativeSetter) nativeSetter.call(el, el.value);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.blur();
+    } catch (_) { /* best-effort */ }
+  }
+
+  function looksClickable(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  // Polls for `selector` up to timeoutMs (some popups/buttons aren't there yet, or are never
+  // there this run), clicks it once found, then checks back after the click to see whether
+  // anything about the element actually changed — instead of just assuming the click "worked"
+  // the moment it's dispatched. Retries the click once if nothing changed.
+  async function waitAndClick(selector, label, { timeoutMs = 15000, intervalMs = 1000 } = {}) {
+    if (!selector) { logLine(`⏭ No ${label} saved — skipping`); return false; }
+
+    const start = Date.now();
+    let el = null;
+    while (Date.now() - start < timeoutMs) {
+      try {
+        el = document.querySelector(selector);
+      } catch (e) {
+        logLine(`⚠️ ${label} — saved selector is invalid`);
+        return false;
+      }
+      if (el && looksClickable(el)) break;
+      el = null;
+      await sleep(intervalMs);
+    }
+    if (!el) {
+      logLine(`⚠️ ${label} not found/clickable within ${Math.round(timeoutMs / 1000)}s`);
+      return false;
+    }
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const before = { disabled: el.disabled, text: (el.textContent || '').trim() };
+      robustClick(el);
+      logLine(`🖱 Clicked ${label}${attempt > 1 ? ' (retry)' : ''}`);
+      await sleep(900);
+      const stillThere = document.contains(el);
+      const changed = !stillThere || el.disabled !== before.disabled || (el.textContent || '').trim() !== before.text;
+      if (changed) return true;
+      if (attempt === 2) {
+        logLine(`⚠️ ${label} was clicked but nothing on the page changed — the click may not have registered. You may need to click it by hand.`);
+      }
+    }
+    return false;
   }
 
   // manual=true (from "▶ Run Now" or the menu command) runs even if "run automatically" isn't
   // enabled — useful for testing/re-running without a full page reload.
-  function runFlow(manual = false) {
+  async function runFlow(manual = false) {
     const hostname = window.location.hostname;
     const config = getConfig(hostname);
     if (!config || (!manual && !config.enabled)) return;
 
-    const status = [];
-    const tryClick = (selector, label) => {
-      if (!selector) { status.push(`⏭ No ${label} saved`); return false; }
+    logLine(`▶ Starting run on ${hostname}${manual ? ' (manual)' : ' (auto)'}`);
+
+    // Click into any saved login fields (username, password, ...) BEFORE clicking Login.
+    // Some sites visually show the browser's saved autofill but don't register it internally
+    // until the field is actually focused/interacted with — see nudgeField() above.
+    for (const sel of (config.preLoginSelectors || [])) {
       try {
-        const el = document.querySelector(selector);
-        if (el) { el.click(); status.push(`✅ Clicked ${label}`); return true; }
-        status.push(`⚠️ ${label} not found on page`);
-        return false;
+        const el = document.querySelector(sel);
+        if (el) {
+          nudgeField(el);
+          logLine(`👆 Focused login field (${sel})`);
+        } else {
+          logLine(`⚠️ Login field not found: ${sel}`);
+        }
       } catch (e) {
-        status.push(`⚠️ ${label} — saved selector is invalid`);
-        return false;
+        logLine(`⚠️ Login field selector invalid: ${sel}`);
       }
-    };
+      await sleep(300);
+    }
 
-    tryClick(config.loginSelector, 'Login button');
+    await waitAndClick(config.loginSelector, 'Login button', { timeoutMs: 5000, intervalMs: 500 });
 
-    // Fixed 10s pause before continuing — gives the browser's saved-password autofill time to
-    // populate the login form, and gives you a window to solve a CAPTCHA or confirm the login
-    // by hand. This script never tries to detect or bypass a CAPTCHA itself.
-    setTimeout(() => {
-      (config.popupCloseSelectors || []).forEach((sel, i) => tryClick(sel, `popup-close button #${i + 1}`));
-      setTimeout(() => {
-        tryClick(config.collectSelector, 'Collect button');
-        showToast(status);
-      }, 800);
-    }, 10000);
+    // Fixed 10s pause before continuing — gives the page time to actually log in, and gives
+    // you a window to solve a CAPTCHA or confirm the login by hand. This script never tries
+    // to detect or bypass a CAPTCHA itself.
+    logLine('⏳ Waiting 10s for login/CAPTCHA…');
+    await sleep(10000);
+
+    // Popup-close buttons: poll for each — a given popup isn't always the one that shows up
+    // on any particular run, so a fixed one-shot check misses it more often than not.
+    for (let i = 0; i < (config.popupCloseSelectors || []).length; i++) {
+      await waitAndClick(config.popupCloseSelectors[i], `popup-close button #${i + 1}`, { timeoutMs: 5000, intervalMs: 800 });
+    }
+
+    // Collect button: same story — the post-login screen isn't always ready the moment we
+    // get here, so poll for it instead of a single fixed-delay attempt.
+    await waitAndClick(config.collectSelector, 'Collect button', { timeoutMs: 20000, intervalMs: 1000 });
+
+    logLine('✅ Run finished');
   }
 
   function openModal() {
@@ -234,12 +412,17 @@
 
     const hint = document.createElement('div');
     hint.className = 'ac-hint';
-    hint.textContent = `For ${hostname}. Teach it which buttons to click: Login, then (optionally) any popup/ad close buttons, then Collect. After Login it always pauses 10 seconds — enough time for saved autofill to populate, and for you to solve a CAPTCHA or confirm the login by hand — before it closes popups and clicks Collect.`;
+    hint.textContent = `For ${hostname}. If this site doesn't seem to notice your saved username/password until you click into each field yourself, add them below (click username, then password) — the automation will click into them first. Then teach it which buttons to click: Login, then (optionally) any popup/ad close buttons, then Collect. After Login it always pauses 10 seconds for a CAPTCHA or to confirm the login by hand, then polls for popups and Collect since they aren't always there right away.`;
     modal.appendChild(hint);
 
-    let config = getConfig(hostname) || { loginSelector: '', popupCloseSelectors: [], collectSelector: '', enabled: false };
+    let config = getConfig(hostname) || { loginSelector: '', popupCloseSelectors: [], collectSelector: '', preLoginSelectors: [], enabled: false };
 
-    const loginRow = document.createElement('div'); loginRow.className = 'ac-row';
+    const fieldListWrap = document.createElement('div');
+    modal.appendChild(fieldListWrap);
+    const fieldBtn = document.createElement('button'); fieldBtn.className = 'ac-btn'; fieldBtn.style.background = '#3f51b5'; fieldBtn.textContent = '🎯 Add Login Field (username, password, ...)';
+    modal.appendChild(fieldBtn);
+
+    const loginRow = document.createElement('div'); loginRow.className = 'ac-row'; loginRow.style.marginTop = '10px';
     const loginLabel = document.createElement('span');
     const loginBtn = document.createElement('button'); loginBtn.className = 'ac-btn'; loginBtn.style.background = '#ff9800'; loginBtn.textContent = '🎯 Set Login Button';
     loginRow.appendChild(loginLabel); loginRow.appendChild(loginBtn);
@@ -277,6 +460,19 @@
     function render() {
       loginLabel.textContent = config.loginSelector ? `📌 ${config.loginSelector}` : 'Not set';
       collectLabel.textContent = config.collectSelector ? `📌 ${config.collectSelector}` : 'Not set';
+      fieldListWrap.innerHTML = '';
+      (config.preLoginSelectors || []).forEach((sel, i) => {
+        const item = document.createElement('div'); item.className = 'ac-list-item';
+        const span = document.createElement('span'); span.textContent = `📌 ${i + 1}. ${sel}`;
+        const rm = document.createElement('button'); rm.className = 'ac-btn'; rm.style.background = '#9e9e9e'; rm.style.padding = '2px 6px'; rm.textContent = '✕';
+        rm.onclick = () => {
+          config.preLoginSelectors.splice(i, 1);
+          saveConfig(hostname, config);
+          render();
+        };
+        item.appendChild(span); item.appendChild(rm);
+        fieldListWrap.appendChild(item);
+      });
       popupListWrap.innerHTML = '';
       (config.popupCloseSelectors || []).forEach((sel, i) => {
         const item = document.createElement('div'); item.className = 'ac-list-item';
@@ -299,6 +495,19 @@
       config.enabled = toggleCheckbox.checked;
       saveConfig(hostname, config);
     });
+
+    fieldBtn.onclick = () => {
+      container.style.display = 'none';
+      status.textContent = 'Click a login field on the page (e.g. username, then run this again for password)...';
+      pickElementGeneric((selector) => {
+        config.preLoginSelectors = config.preLoginSelectors || [];
+        config.preLoginSelectors.push(selector);
+        saveConfig(hostname, config);
+        container.style.display = '';
+        status.textContent = `✅ Login field #${config.preLoginSelectors.length} saved.`;
+        render();
+      }, () => { container.style.display = ''; status.textContent = 'Cancelled.'; });
+    };
 
     loginBtn.onclick = () => {
       container.style.display = 'none';
@@ -338,13 +547,13 @@
     };
 
     runBtn.onclick = () => {
-      status.textContent = 'Running now — Login click immediately, then a 10s pause, then popups + Collect...';
+      status.textContent = 'Running now — see the log panel in the corner of the page for live progress.';
       runFlow(true);
     };
 
     clearBtn.onclick = () => {
       GM_deleteValue(`autoCollectConfig_${hostname}`);
-      config = { loginSelector: '', popupCloseSelectors: [], collectSelector: '', enabled: false };
+      config = { loginSelector: '', popupCloseSelectors: [], collectSelector: '', preLoginSelectors: [], enabled: false };
       status.textContent = 'Cleared everything for this site.';
       render();
     };
