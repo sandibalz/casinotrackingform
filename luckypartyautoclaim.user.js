@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LuckyParty Auto Claim Now
 // @namespace    https://luckparty.com/
-// @version      1.1.0
-// @description  Closes any popups (including iframe-embedded ones) blocking the way, then finds <div class="button-content">Claim Now</div> on luckparty.com and clicks the Claim Now button.
+// @version      1.2.0
+// @description  Closes any popups (including iframe-embedded ones) blocking the way, then finds <div class="button-content">Claim Now</div> on luckparty.com and clicks the Claim Now button. Leaves the Coin Store dialog alone.
 // @match        https://luckparty.com/*
 // @run-at       document-idle
 // @grant        none
@@ -56,6 +56,26 @@
         return iconEl.closest('button, [role="button"], a') || iconEl;
     }
 
+    // The Coin Store dialog (its React component renders with
+    // data-sentry-source-file="FreeCoinsDialog.tsx" on elements inside it,
+    // e.g. its info-icon image) is opened deliberately - by the collector
+    // automation or by hand - and has to stay open. Everything else this
+    // script finds via .close-popup-button__close-icon is fair game, but the
+    // Store dialog happens to use that same close icon, so it needs its own
+    // explicit exemption rather than being caught by the generic closer.
+    // Walk a bounded number of ancestors up from the close target looking for
+    // that marker anywhere in the same dialog's subtree, rather than checking
+    // the whole document (which could wrongly protect an unrelated popup that
+    // happens to be open elsewhere at the same time as the Store).
+    function isCoinStoreDialog(target) {
+        let node = target;
+        for (let i = 0; i < 12 && node; i++) {
+            if (node.querySelector && node.querySelector('[data-sentry-source-file="FreeCoinsDialog.tsx"]')) return true;
+            node = node.parentElement;
+        }
+        return false;
+    }
+
     function robustClick(el) {
         // Plain .click() doesn't reliably trigger React-driven handlers on this site
         // for the popup close button — dispatch a real pointer/mouse sequence instead.
@@ -81,6 +101,7 @@
             const target = closeTargetFor(iconEl);
             if (closedPopups.has(target)) continue;
             if (!isVisible(target)) continue;
+            if (isCoinStoreDialog(target)) continue; // leave the Coin Store popup open
 
             closedPopups.add(target);
             console.log('[Auto Claim Now] closing popup', target);
