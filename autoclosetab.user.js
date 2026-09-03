@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Auto Close Tab with Exclusion List
 // @namespace    http://tampermonkey.net/
-// @version      1.6.0
-// @description  Auto closes tabs after 15 minutes, with a movable mini popup with icons to disable for specific tabs or add sites to exclusion list, only runs on main tab. Popup lives in a shadow DOM anchored to <html> with a re-attach watchdog so it can't be hidden/clipped or wiped out by a site's own CSS/JS.
+// @version      1.7.0
+// @description  Auto closes tabs after 15 minutes, with a movable mini popup with icons to disable for specific tabs or add sites to exclusion list, only runs on main tab. Popup lives in a shadow DOM anchored to <html> with a re-attach watchdog so it can't be hidden/clipped or wiped out by a site's own CSS/JS. Popup now (re)shows on every run instead of only the run that starts the timer — fixes it never appearing on sites (e.g. winbonanza.com) whose own login flow does a real full-page redirect moments after load, wiping the popup before it could be seen or interacted with.
 // @author       Grok
 // @run-at       document-idle
 // @match        *://*/*
@@ -38,7 +38,6 @@
     const now = Date.now();
     const fifteenMinutes = 15 * 60 * 1000;
     let endTime = endTimeStr ? parseInt(endTimeStr, 10) : null;
-    let shouldShowPopup = false;
     if (endTime && endTime > now) {
         // Resume timer if still valid
         setTimeout(() => {
@@ -55,7 +54,7 @@
             }
         }, endTime - now);
     } else {
-        // New timer, show popup
+        // New timer
         endTime = now + fifteenMinutes;
         sessionStorage.setItem(END_TIME_KEY, endTime.toString());
         setTimeout(() => {
@@ -74,11 +73,23 @@
                 }
             }
         }, fifteenMinutes);
-        shouldShowPopup = true;
     }
-    if (!shouldShowPopup) {
-        return;
-    }
+    // Always (re)show the popup on every run of this script, whether this is a brand-new
+    // timer or we're resuming one already in progress — previously the popup only ever
+    // appeared once, on the run that first started the timer, on the assumption a later
+    // "resume" run just means an ordinary reload where the user already saw it.
+    // Reported on winbonanza.com (9/2/26): its login flow does a REAL top-level page
+    // navigation (/lobby -> /login -> OAuth /authorize/callback -> back), not a same-page
+    // SPA transition, moments after the lobby first loads (looks like a silent session/
+    // token refresh done via full-page redirect). That wipes the entire document — this
+    // script's whole execution, the popup, its watchdog, everything — the same as a manual
+    // reload would, before the user ever gets a chance to see or click the popup that
+    // existed for an instant on that very first run. Every later run then found a timer
+    // already in progress and (under the old logic) silently skipped showing the popup
+    // again, leaving no way to disable/exclude before the tab closed. Showing it on every
+    // run (still gated on the disabled/excluded checks above) trades a popup that can
+    // reappear on an ordinary same-tab reload for guaranteeing the user always gets a
+    // chance to interact with it.
     // Host element: anchors the popup to <html> instead of <body>, and is
     // the thing that's actually position:fixed. Some sites put a CSS
     // transform / overflow:hidden / small height on <body>, which creates a
