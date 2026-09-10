@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LuckyParty Auto Claim Now
 // @namespace    https://luckparty.com/
-// @version      1.2.0
-// @description  Closes any popups (including iframe-embedded ones) blocking the way, then finds <div class="button-content">Claim Now</div> on luckparty.com and clicks the Claim Now button. Leaves the Coin Store dialog alone.
+// @version      1.3.0
+// @description  Closes any popups (including iframe-embedded ones) blocking the way, then finds <div class="button-content">Claim Now</div> on luckparty.com and clicks the Claim Now button. Leaves the Coin Store dialog alone, and leaves any popup with its own unclaimed "Claim Now" button alone too (so it gets claimed, not closed).
 // @match        https://luckparty.com/*
 // @run-at       document-idle
 // @grant        none
@@ -76,6 +76,30 @@
         return false;
     }
 
+    // Some popups (confirmed 9/10/26: the "Limited Time Gift" free-offer
+    // dialog, FreeOfferDialog.tsx) carry their own unclaimed "Claim Now"
+    // button as a sibling of the close icon, inside the same dialog. If
+    // closePopups() closes that dialog first (it runs before findClaimDivs()
+    // on every scan pass), the reward is forfeited — the claim button never
+    // gets clicked. Rather than hardcode another named-component exemption
+    // like isCoinStoreDialog, generalize: don't close a popup that still has
+    // an unclaimed "Claim Now" div.button-content anywhere in it. Once a
+    // click actually claims it, the button's text/state changes, this check
+    // stops matching, and the now-empty popup is free to be closed on a
+    // later pass same as normal.
+    function hasUnclaimedClaimButton(target) {
+        let node = target;
+        for (let i = 0; i < 12 && node; i++) {
+            if (node.querySelectorAll) {
+                const has = Array.from(node.querySelectorAll('div.button-content'))
+                    .some(el => el.textContent.trim().toLowerCase() === 'claim now');
+                if (has) return true;
+            }
+            node = node.parentElement;
+        }
+        return false;
+    }
+
     function robustClick(el) {
         // Plain .click() doesn't reliably trigger React-driven handlers on this site
         // for the popup close button — dispatch a real pointer/mouse sequence instead.
@@ -102,6 +126,7 @@
             if (closedPopups.has(target)) continue;
             if (!isVisible(target)) continue;
             if (isCoinStoreDialog(target)) continue; // leave the Coin Store popup open
+            if (hasUnclaimedClaimButton(target)) continue; // let scan() claim it first, don't close it out from under the claim
 
             closedPopups.add(target);
             console.log('[Auto Claim Now] closing popup', target);
