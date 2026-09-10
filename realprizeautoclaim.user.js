@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.6.1
+// @version      1.6.2
 // @description  Detects bonus popups, daily prize COLLECT, grand prize COLLECT, any "Collect" / "Claim Now" button anywhere on the page (including image-based Claim Now popups), CLAIM PRIZE / SPIN & WIN buttons for 1 min after launch, and auto-presses the Login button once the email + password fields are filled, on RealPrize and LoneStar Casino
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -362,10 +362,15 @@
                 parent = parent.parentElement;
             }
 
-            // Last resort: if the image is inside a clickable container, click that
+            // Last resort: only click the clickable container if it actually has
+            // claim/collect text (content or aria-label) — otherwise store/promo
+            // tiles that merely reuse the /pops/ image path get clicked by mistake.
             const clickableParent = img.closest('button, a, [role="button"], [onclick], [class*="btn" i], [class*="button" i]');
             if (clickableParent && isVisibleLoose(clickableParent)) {
-                return clickableParent;
+                const ariaLabel = clickableParent.getAttribute('aria-label') || '';
+                if (CLAIM_TEXT_RE.test(cleanText(clickableParent)) || CLAIM_TEXT_RE.test(ariaLabel)) {
+                    return clickableParent;
+                }
             }
         }
         return null;
