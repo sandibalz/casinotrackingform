@@ -1,85 +1,117 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.4.0
-// @description  Detects bonus popups, daily prize COLLECT, grand prize COLLECT, plus CLAIM PRIZE / SPIN & WIN buttons for 1 min after launch on RealPrize and LoneStar Casino
+// @version      1.6.1
+// @description  Detects bonus popups, daily prize COLLECT, grand prize COLLECT, any "Collect" / "Claim Now" button anywhere on the page (including image-based Claim Now popups), CLAIM PRIZE / SPIN & WIN buttons for 1 min after launch, and auto-presses the Login button once the email + password fields are filled, on RealPrize and LoneStar Casino
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
 // @match        *://*.lonestarcasino.com/*
 // @grant        none
 // @run-at       document-idle
-// @updateURL    https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/realprizeautoclaim.user.js
-// @downloadURL  https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/realprizeautoclaim.user.js
 // ==/UserScript==
 //
 // NOTE: if you see NO "[AutoClaim]" lines in the console on the page that has the
 // wheel, the widget is in a cross-origin iframe. Run this in the console on that
 // page to find its origin, then add a matching @match line above:
 //   [...document.querySelectorAll('iframe')].map(f => f.src)
-
+//
+// v1.6.1 – added explicit support for image-based "Claim Now" popups
+//          (cdn.lonestarcasino.com/pops/... images + any "Claim Now" text)
 (function () {
     'use strict';
 
     const POLL_INTERVAL_MS       = 800;
     const CLAIM_COOLDOWN_MS      = 5000;
-    const GRAND_PRIZE_DELAYS_MS  = [5000, 7500, 10000]; // retry at 5s, 7.5s, 10s after daily collect
+    const GRAND_PRIZE_DELAYS_MS  = [5000, 7500, 10000];
     const CLAIM_TEXT_RE          = /\b(claim\s*now|collect|claim\s*bonus)\b/i;
 
-    // Launch-window button scan (CLAIM PRIZE / SPIN & WIN)
-    const LAUNCH_SCAN_DURATION_MS = 60000;  // keep looking for 1 minute post launch
-    const LAUNCH_SCAN_INTERVAL_MS = 10000;  // rescan every 10 seconds
+    // Launch-window button scan
+    const LAUNCH_SCAN_DURATION_MS = 60000;
+    const LAUNCH_SCAN_INTERVAL_MS = 10000;
     const LAUNCH_BUTTON_MATCHERS  = [
         { name: 'CLAIM PRIZE', re: /claim\s*prize/i },
         { name: 'SPIN & WIN',  re: /spin\s*&\s*win/i }
     ];
 
-    let lastClaimAt        = 0;
-    let grandPrizeArmed    = false; // true after a daily collect fires
-    let grandPrizeTimers   = [];    // holds pending setTimeout IDs
+    // Auto-login config
+    const LOGIN_COOLDOWN_MS  = 3000;
+    const LOGIN_MIN_PW_LEN   = 6;
+    const MAX_LOGIN_SUBMITS  = 3;
+    const LOGIN_SUBMIT_RE    = /^(log\s?in|sign\s?in|log\s?in\s?now)$/i;
+    const LOGIN_EMAIL_OPT_RE = /^(log|sign)\s?in\s+with\s+e-?mail$/i;
+    const LOGIN_OPENER_RE    = /^(log\s?in|sign\s?in)$/i;
 
+    let lastClaimAt        = 0;
+    let grandPrizeArmed    = false;
+    let grandPrizeTimers   = [];
     let launchScanUntil    = 0;
     let launchScanTimer    = null;
     let lastLaunchCheckAt  = 0;
+    let lastLoginActionAt  = 0;
+    let loginSubmits       = 0;
+    let loginComplete      = false;
+    let loginModalOpened   = false;
 
     // ── Helpers ────────────────────────────────────────────────────────────────
-
     function log(msg) {
         console.log(`[AutoClaim] ${msg}`);
     }
-
     function now() {
         return Date.now();
     }
-
     function onCooldown() {
         return (now() - lastClaimAt) < CLAIM_COOLDOWN_MS;
     }
 
-    function realClick(el) {
-        try {
-            el.dispatchEvent(new MouseEvent('click', {
-                bubbles: true, cancelable: true, view: window
-            }));
-        } catch (_) {
-            el.click();
-        }
-        lastClaimAt = now();
+    // ── Human-like click emulation ─────────────────────────────────────────────
+    function humanClick(el) {
+        if (!el) return;
+
+        const rect = el.getBoundingClientRect();
+        const x = rect.left + rect.width  * (0.35 + Math.random() * 0.3);
+        const y = rect.top  + rect.height * (0.35 + Math.random() * 0.3);
+
+        const base = {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            clientX: x,
+            clientY: y,
+            screenX: x + (window.screenX || 0),
+            screenY: y + (window.screenY || 0),
+            button: 0,
+            buttons: 1,
+            pointerId: 1,
+            pointerType: 'mouse',
+            isPrimary: true
+        };
+
+        el.dispatchEvent(new MouseEvent('mousemove',   { ...base, buttons: 0 }));
+        el.dispatchEvent(new PointerEvent('pointermove', { ...base, buttons: 0 }));
+        el.dispatchEvent(new MouseEvent('mouseover',   { ...base, buttons: 0 }));
+        el.dispatchEvent(new MouseEvent('mouseenter',  { ...base, buttons: 0 }));
+        el.dispatchEvent(new PointerEvent('pointerover',  { ...base, buttons: 0 }));
+        el.dispatchEvent(new PointerEvent('pointerenter', { ...base, buttons: 0 }));
+
+        const downDelay = 40 + Math.random() * 90;
+
+        setTimeout(() => {
+            el.dispatchEvent(new PointerEvent('pointerdown', base));
+            el.dispatchEvent(new MouseEvent('mousedown', base));
+
+            setTimeout(() => {
+                const up = { ...base, buttons: 0 };
+                el.dispatchEvent(new PointerEvent('pointerup', up));
+                el.dispatchEvent(new MouseEvent('mouseup', up));
+                el.dispatchEvent(new MouseEvent('click', up));
+                try { el.click(); } catch (_) {}
+                lastClaimAt = now();
+            }, 30 + Math.random() * 60);
+        }, downDelay);
     }
 
-    // Full pointer + mouse sequence – React widgets often ignore a bare click
-    function robustClick(el) {
-        const opts = { bubbles: true, cancelable: true, view: window };
-        try {
-            el.dispatchEvent(new PointerEvent('pointerdown', opts));
-            el.dispatchEvent(new MouseEvent('mousedown', opts));
-            el.dispatchEvent(new PointerEvent('pointerup', opts));
-            el.dispatchEvent(new MouseEvent('mouseup', opts));
-            el.dispatchEvent(new MouseEvent('click', opts));
-        } catch (_) {
-            try { el.click(); } catch (__) {}
-        }
-        lastClaimAt = now();
-    }
+    function realClick(el)   { humanClick(el); }
+    function robustClick(el) { humanClick(el); }
 
     function isVisible(el) {
         const style = window.getComputedStyle(el);
@@ -91,8 +123,6 @@
         );
     }
 
-    // Looser test for the animated launch buttons (opacity/scale transitions,
-    // absolute positioning) – only rejects genuinely hidden / zero-size nodes.
     function isVisibleLoose(el) {
         const style = window.getComputedStyle(el);
         if (style.display === 'none' || style.visibility === 'hidden') return false;
@@ -100,7 +130,6 @@
         return rect.width > 0 || rect.height > 0;
     }
 
-    // querySelectorAll that also descends into open shadow roots
     function collectDeep(root, selector, out) {
         let nodes;
         try { nodes = root.querySelectorAll(selector); } catch (_) { return; }
@@ -111,18 +140,125 @@
             if (el.shadowRoot) collectDeep(el.shadowRoot, selector, out);
         }
     }
+    function gatherDeep(selector) {
+        const out = [];
+        collectDeep(document, selector, out);
+        return out;
+    }
+
+    function cleanText(el) {
+        return ((el && el.textContent) || '').replace(/\s+/g, ' ').trim();
+    }
 
     function clearGrandPrizeTimers() {
         grandPrizeTimers.forEach(id => clearTimeout(id));
         grandPrizeTimers = [];
     }
 
-    // ── Grand prize COLLECT ────────────────────────────────────────────────────
+    // ── Auto-login helpers ────────────────────────────────────────────────────
+    function loginClickable(el) {
+        if (!el) return false;
+        if (el.disabled) return false;
+        if (el.getAttribute && el.getAttribute('aria-disabled') === 'true') return false;
+        return isVisibleLoose(el);
+    }
 
-    /**
-     * Looks specifically for #daily_button inside #grand_prize_finished_container.
-     * The container must have the "is-collect" class and be visible.
-     */
+    function innermostOnly(list) {
+        return list.filter(el => !list.some(other => other !== el && el.contains(other)));
+    }
+
+    function matchLoginControls(re) {
+        const raw = gatherDeep('button, a, [role="button"], [class*="btn" i], [class*="button" i]');
+        const hit = raw.filter(el => re.test(cleanText(el)) && loginClickable(el));
+        return innermostOnly(hit);
+    }
+
+    function visibleFilledPassword() {
+        return gatherDeep('input[type="password"]').find(
+            i => isVisibleLoose(i) && i.value && i.value.length >= LOGIN_MIN_PW_LEN
+        ) || null;
+    }
+
+    function anyVisiblePassword() {
+        return gatherDeep('input[type="password"]').some(isVisibleLoose);
+    }
+
+    function emailFieldReady() {
+        const users = gatherDeep('input').filter(i => {
+            if (!isVisibleLoose(i)) return false;
+            const type = (i.type || 'text').toLowerCase();
+            if (type === 'email') return true;
+            if (type !== 'text' && type !== 'tel') return false;
+            const meta = `${i.name || ''} ${i.id || ''} ${i.autocomplete || ''} ${i.placeholder || ''}`.toLowerCase();
+            return /(e-?mail|user|login|phone|account)/.test(meta);
+        });
+        if (users.length === 0) return true;
+        return users.some(i => i.value && i.value.trim());
+    }
+
+    function tryPressLogin() {
+        if (loginComplete) return;
+        if (now() - lastLoginActionAt < LOGIN_COOLDOWN_MS) return;
+
+        const pw = visibleFilledPassword();
+        if (pw) {
+            const form = pw.closest('form');
+            let submit = null;
+            if (form) {
+                submit = innermostOnly(
+                    [...form.querySelectorAll('button, [role="button"], input[type="submit"]')].filter(b =>
+                        loginClickable(b) && (
+                            LOGIN_SUBMIT_RE.test(cleanText(b)) ||
+                            (b.type === 'submit' && LOGIN_SUBMIT_RE.test((b.value || '').trim()))
+                        )
+                    )
+                )[0] || null;
+
+                if (!submit) {
+                    const submits = [...form.querySelectorAll('button[type="submit"], input[type="submit"]')]
+                        .filter(loginClickable);
+                    if (submits.length === 1) submit = submits[0];
+                }
+            }
+            if (!submit) {
+                submit = matchLoginControls(LOGIN_SUBMIT_RE).find(b => b.tagName !== 'A') || null;
+            }
+            if (submit && emailFieldReady()) {
+                log(`Login fields filled → pressing "${cleanText(submit) || submit.value || 'submit'}"`);
+                robustClick(submit);
+                lastLoginActionAt = now();
+                if (++loginSubmits >= MAX_LOGIN_SUBMITS) {
+                    loginComplete = true;
+                    log(`Reached ${MAX_LOGIN_SUBMITS} login attempts – auto-login disabled for this page load`);
+                }
+            } else if (submit) {
+                log('Password filled but email field still empty – waiting for autofill');
+            }
+            return;
+        }
+
+        const emailOpt = matchLoginControls(LOGIN_EMAIL_OPT_RE)[0];
+        if (emailOpt) {
+            log('Opening "Login with Email" pane');
+            robustClick(emailOpt);
+            lastLoginActionAt = now();
+            return;
+        }
+
+        if (anyVisiblePassword()) return;
+
+        if (!loginModalOpened) {
+            const opener = matchLoginControls(LOGIN_OPENER_RE)[0];
+            if (opener) {
+                log('Opening login modal');
+                robustClick(opener);
+                loginModalOpened = true;
+                lastLoginActionAt = now();
+            }
+        }
+    }
+
+    // ── Grand prize COLLECT ────────────────────────────────────────────────────
     function checkGrandPrizeCollect() {
         const container = document.getElementById('grand_prize_finished_container');
         if (!container) return false;
@@ -142,20 +278,14 @@
         return true;
     }
 
-    /**
-     * Arms a series of delayed attempts to catch the grand prize popup
-     * that appears 5–10 seconds after the regular daily collect.
-     */
     function armGrandPrizeWatch() {
-        if (grandPrizeArmed) return; // already watching
+        if (grandPrizeArmed) return;
         grandPrizeArmed = true;
         clearGrandPrizeTimers();
-
         log(`Arming grand prize watch (checks at ${GRAND_PRIZE_DELAYS_MS.join('ms, ')}ms)`);
-
         GRAND_PRIZE_DELAYS_MS.forEach(delay => {
             const id = setTimeout(() => {
-                if (!grandPrizeArmed) return; // already claimed, abort
+                if (!grandPrizeArmed) return;
                 log(`Grand prize delayed check at ${delay}ms…`);
                 checkGrandPrizeCollect();
             }, delay);
@@ -164,18 +294,15 @@
     }
 
     // ── Daily prize COLLECT ────────────────────────────────────────────────────
-
     function checkDailyCollect() {
-        // Only target #daily_button that is NOT inside the grand prize container
         const btn = document.getElementById('daily_button');
         if (!btn) return;
-        if (btn.closest('#grand_prize_finished_container')) return; // handled separately
+        if (btn.closest('#grand_prize_finished_container')) return;
         if (!isVisible(btn)) return;
 
         const label = (btn.innerText || btn.textContent || '').trim().toUpperCase();
         if (label === '' || label === 'CLAIMED' || label === 'DONE') return;
 
-        // Skip if today's section already shows a claimed checkmark
         const popup = btn.closest('#daily_prize_popup');
         if (popup) {
             const todaySection = popup.querySelector('#daily-today');
@@ -187,11 +314,64 @@
 
         log(`Daily COLLECT button found → clicking; arming grand prize watch`);
         realClick(btn);
-        armGrandPrizeWatch(); // kick off delayed grand prize checks
+        armGrandPrizeWatch();
+    }
+
+    // ── Broad Collect / Claim Now search ───────────────────────────────────────
+    function findAnyCollectButton() {
+        const candidates = gatherDeep(
+            'button, a, [role="button"], [class*="btn" i], [class*="button" i], [class*="collect" i], [id*="collect" i], [class*="claim" i], [id*="claim" i]'
+        );
+
+        const visible = candidates.filter(el => {
+            if (!isVisibleLoose(el)) return false;
+            if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+            const text = cleanText(el);
+            return CLAIM_TEXT_RE.test(text);
+        });
+
+        return innermostOnly(visible);
+    }
+
+    // ── Image-based Claim Now popup (the one you showed) ───────────────────────
+    function findImageBasedClaimNow() {
+        // Look for the specific popup images used by LoneStar
+        const imgs = gatherDeep('img[src*="cdn.lonestarcasino.com/pops/"], img[src*="/pops/"]');
+
+        for (const img of imgs) {
+            if (!isVisibleLoose(img)) continue;
+
+            // Walk up a few levels looking for a Claim Now / Collect button
+            let parent = img.parentElement;
+            for (let i = 0; i < 8 && parent; i++) {
+                // Search inside this parent for a claim/collect button
+                const btns = parent.querySelectorAll('button, a, [role="button"], [class*="btn" i], [class*="button" i]');
+                for (const btn of btns) {
+                    if (!isVisibleLoose(btn)) continue;
+                    if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') continue;
+                    if (CLAIM_TEXT_RE.test(cleanText(btn))) {
+                        return btn;
+                    }
+                }
+
+                // Also check if the parent itself is a clickable claim element
+                if (CLAIM_TEXT_RE.test(cleanText(parent)) && isVisibleLoose(parent)) {
+                    return parent;
+                }
+
+                parent = parent.parentElement;
+            }
+
+            // Last resort: if the image is inside a clickable container, click that
+            const clickableParent = img.closest('button, a, [role="button"], [onclick], [class*="btn" i], [class*="button" i]');
+            if (clickableParent && isVisibleLoose(clickableParent)) {
+                return clickableParent;
+            }
+        }
+        return null;
     }
 
     // ── Generic popup scanner ──────────────────────────────────────────────────
-
     function findClaimTarget(popup) {
         const candidates = popup.querySelectorAll('button, a, [role="button"], .btn, .button');
         for (const el of candidates) {
@@ -207,9 +387,10 @@
     }
 
     function scanAndClaim() {
+        try { tryPressLogin(); } catch (e) { log('login attempt error: ' + e.message); }
         if (onCooldown()) return;
 
-        // 1. Generic bonus popups (highest priority)
+        // 1. Generic bonus popups
         const popups = document.querySelectorAll('.genpop.showitbig');
         for (const popup of popups) {
             if (!isVisible(popup)) continue;
@@ -220,19 +401,36 @@
             return;
         }
 
-        // 2. Grand prize collect (check opportunistically in case it appeared
-        //    without going through the daily collect path, e.g. page reload)
+        // 2. Grand prize collect
         if (checkGrandPrizeCollect()) return;
 
-        // 3. Regular daily COLLECT button
+        // 3. Regular daily COLLECT
         checkDailyCollect();
+
+        // 4. Image-based Claim Now popup (the new one you reported)
+        const imageClaim = findImageBasedClaimNow();
+        if (imageClaim) {
+            log(`Image-based Claim Now popup found → clicking "${cleanText(imageClaim) || imageClaim.tagName}"`);
+            realClick(imageClaim);
+            return;
+        }
+
+        // 5. Broad search – any “Collect / Claim Now / Claim Bonus” button
+        const anyCollects = findAnyCollectButton();
+        if (anyCollects.length) {
+            const best = anyCollects.find(el => {
+                const t = cleanText(el).toUpperCase();
+                return t !== 'CLAIMED' && t !== 'DONE' && t !== '';
+            }) || anyCollects[0];
+
+            log(`Broad Collect/Claim Now button found → clicking "${cleanText(best)}"`);
+            realClick(best);
+        }
     }
 
-    // ── Launch-window button scan (CLAIM PRIZE / SPIN & WIN) ───────────────────
-
+    // ── Launch-window button scan ──────────────────────────────────────────────
     function clickLaunchButtons() {
         lastLaunchCheckAt = now();
-
         const btns = [];
         collectDeep(document, 'button, [role="button"]', btns);
 
@@ -271,10 +469,8 @@
         launchScanUntil = now() + LAUNCH_SCAN_DURATION_MS;
         log(`Launch-window button scan armed (${reason}) – every ` +
             `${LAUNCH_SCAN_INTERVAL_MS}ms for ${LAUNCH_SCAN_DURATION_MS}ms`);
-
-        clickLaunchButtons(); // immediate first pass
-
-        if (launchScanTimer) return; // interval already running; window just got extended
+        clickLaunchButtons();
+        if (launchScanTimer) return;
         launchScanTimer = setInterval(() => {
             if (now() >= launchScanUntil) {
                 clearInterval(launchScanTimer);
@@ -286,9 +482,12 @@
         }, LAUNCH_SCAN_INTERVAL_MS);
     }
 
-    // Re-arm the 1-min window on SPA route changes (client-side navigation)
+    // Re-arm on SPA navigation
     (function hookSpaNav() {
-        const fire = () => armLaunchScan('SPA navigation');
+        const fire = () => {
+            loginModalOpened = false;
+            armLaunchScan('SPA navigation');
+        };
         for (const fn of ['pushState', 'replaceState']) {
             const orig = history[fn];
             history[fn] = function () {
@@ -301,15 +500,12 @@
     })();
 
     // ── MutationObserver ───────────────────────────────────────────────────────
-
     const observer = new MutationObserver(() => {
         scanAndClaim();
-        // during the launch window, also react to DOM changes (throttled)
         if (now() < launchScanUntil && now() - lastLaunchCheckAt > 500) {
             clickLaunchButtons();
         }
     });
-
     observer.observe(document.body, {
         childList: true,
         subtree: true,
@@ -318,11 +514,8 @@
     });
 
     // ── Polling fallback ───────────────────────────────────────────────────────
-
     setInterval(scanAndClaim, POLL_INTERVAL_MS);
-
     armLaunchScan('page load');
-
-    log(`Loaded on ${location.hostname} – watching for popups, daily collect, grand prize, and launch buttons…`);
-
+    try { tryPressLogin(); } catch (_) {}
+    log(`Loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), launch buttons, and login…`);
 })();
