@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.6.2
+// @version      1.6.3
 // @description  Detects bonus popups, daily prize COLLECT, grand prize COLLECT, any "Collect" / "Claim Now" button anywhere on the page (including image-based Claim Now popups), CLAIM PRIZE / SPIN & WIN buttons for 1 min after launch, and auto-presses the Login button once the email + password fields are filled, on RealPrize and LoneStar Casino
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -17,6 +17,11 @@
 //
 // v1.6.1 – added explicit support for image-based "Claim Now" popups
 //          (cdn.lonestarcasino.com/pops/... images + any "Claim Now" text)
+// v1.6.3 – fixed CPU spike/tab freeze: debounced the MutationObserver (was
+//          running a full scan on every class/style mutation, unbounded),
+//          throttled the tryPressLogin DOM walk to ~2x/sec, and stopped
+//          re-clicking the same launch button (CLAIM PRIZE/SPIN & WIN) node
+//          repeatedly
 (function () {
     'use strict';
 
@@ -51,6 +56,8 @@
     let loginSubmits       = 0;
     let loginComplete      = false;
     let loginModalOpened   = false;
+    let lastLoginScanAt    = 0;   // throttles the expensive tryPressLogin DOM walk
+    const clickedLaunchButtons = new WeakSet(); // avoid re-clicking the same node
 
     // ── Helpers ────────────────────────────────────────────────────────────────
     function log(msg) {
@@ -392,7 +399,14 @@
     }
 
     function scanAndClaim() {
-        try { tryPressLogin(); } catch (e) { log('login attempt error: ' + e.message); }
+        // Throttle the login DOM walk to at most ~2x/sec – it was previously
+        // running on every single MutationObserver firing (unbounded), which
+        // is the main source of the CPU spikes/freezes on pages with live
+        // animations (spinning wheel, countdown ticks, etc).
+        if (now() - lastLoginScanAt >= 500) {
+            lastLoginScanAt = now();
+            try { tryPressLogin(); } catch (e) { log('login attempt error: ' + e.message); }
+        }
         if (onCooldown()) return;
 
         // 1. Generic bonus popups
@@ -455,9 +469,11 @@
                 log(`"${match.name}" present but not visible – skipping`);
                 continue;
             }
+            if (clickedLaunchButtons.has(btn)) continue; // already clicked this exact node
 
             log(`"${match.name}" found → clicking`);
             robustClick(btn);
+            clickedLaunchButtons.add(btn);
             clicked++;
         }
 
@@ -505,11 +521,21 @@
     })();
 
     // ── MutationObserver ───────────────────────────────────────────────────────
+    // Debounced: on pages with live animations (spinning wheel, countdown
+    // ticks, hover states) class/style attributes can mutate dozens of times
+    // per second. Running the full scan synchronously on every mutation
+    // record was pegging the main thread and freezing/crashing the tab.
+    // Coalesce bursts into one scan per 150ms instead.
+    let mutationDebounceTimer = null;
     const observer = new MutationObserver(() => {
-        scanAndClaim();
-        if (now() < launchScanUntil && now() - lastLaunchCheckAt > 500) {
-            clickLaunchButtons();
-        }
+        if (mutationDebounceTimer) return;
+        mutationDebounceTimer = setTimeout(() => {
+            mutationDebounceTimer = null;
+            scanAndClaim();
+            if (now() < launchScanUntil && now() - lastLaunchCheckAt > 500) {
+                clickLaunchButtons();
+            }
+        }, 150);
     });
     observer.observe(document.body, {
         childList: true,
