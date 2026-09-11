@@ -1,12 +1,10 @@
 // ==UserScript==
 // @name         Casino Google Form Input (Reliable + Lightweight)
 // @namespace    http://tampermonkey.net/
-// @version      1.67.0
-// @description  Popup form to submit SC data to a Google Form; full per-site detection with centralized helpers; trimmed CSS; reduced polling overhead; consistent auto-submit. Element picker for custom SC selectors, plus an API/network (fetch/XHR/WebSocket) value picker that supports combining two separately-captured values (e.g. redeemable + non-redeemable SC) into one summed total. Form closes instantly on Submit instead of waiting on the server round trip. Owner is no longer hardcoded — chosen once per browser and saved locally, so this one file works for every owner and survives auto-updates. Added 19 casino/site matches found missing from the bookmarks bar (Midnight Reset, 24 Hour Timer, AutoCollect folders). Added a fortunewins.com balance entry (÷100 scaling) — fortunecoins.com redirects there, so the old entry never actually fired. The Auto Login & Collect feature (briefly bundled here in v1.61.0) was moved out to its own separate userscript, autocollect.user.js, so it can be enabled/disabled independently of this SC-tracking script. Both submission paths retry (up to 2 extra attempts with backoff) on a network error or timeout. Auto-submit's fixed 10s post-load delay is randomized 10-15s to spread out multiple tabs. Submissions now POST directly to the Google Form (bypassing the Apps Script Web App entirely for appends) — the Web App's per-request read/scan/write was the real source of the reported network errors, not just something to retry around. Growth control and "current balance" upkeep moved server-side to a scheduled Apps Script cleanup instead of a live per-submission upsert. The form, trigger buttons, and API picker now survive being wiped by a site's own SPA re-render shortly after they're injected (reported on myprize.us: form flashes then disappears) — they re-attach themselves automatically unless closed on purpose.
+// @version      1.66.1
+// @description  Popup form to submit SC data to a Google Form; full per-site detection with centralized helpers; trimmed CSS; reduced polling overhead; consistent auto-submit. Element picker for custom SC selectors, plus an API/network (fetch/XHR/WebSocket) value picker that supports combining two separately-captured values (e.g. redeemable + non-redeemable SC) into one summed total. Form closes instantly on Submit instead of waiting on the server round trip. Owner is no longer hardcoded — chosen once per browser and saved locally, so this one file works for every owner and survives auto-updates. Added 19 casino/site matches found missing from the bookmarks bar (Midnight Reset, 24 Hour Timer, AutoCollect folders). Added a fortunewins.com balance entry (÷100 scaling) — fortunecoins.com redirects there, so the old entry never actually fired. The Auto Login & Collect feature (briefly bundled here in v1.61.0) was moved out to its own separate userscript, autocollect.user.js, so it can be enabled/disabled independently of this SC-tracking script. Both submission paths retry (up to 2 extra attempts with backoff) on a network error or timeout. Auto-submit's fixed 10s post-load delay is randomized 10-15s to spread out multiple tabs. Submissions now POST directly to the Google Form (bypassing the Apps Script Web App entirely for appends) — the Web App's per-request read/scan/write was the real source of the reported network errors, not just something to retry around. Growth control and "current balance" upkeep moved server-side to a scheduled Apps Script cleanup instead of a live per-submission upsert. The form, trigger buttons, and API picker now survive being wiped by a site's own SPA re-render shortly after they're injected (reported on myprize.us: form flashes then disappears) — they re-attach themselves automatically unless closed on purpose. v1.66.0: added a "🔗 Giveaway Link" button (PlayFame/HelloMillions/McLuck/SpinBlitz only) that checks a standalone Apps Script Web App for 30-day cooldown status per site+owner against the Casino SC Tracking sheet's "Last Tried"/"Extra Codes" tabs, and on claim opens an unused link and logs today's date. v1.66.1: the giveaway-link owner list (originally Scott/Linda/Mom/Barb/Kelly/Trish as placeholders) is now just the same Ben/Cindy/Tyler/Jessica identity used for SC submissions (scOwner) — no separate prompt/GM key.
 // @author       Grok
 // @run-at       document-start
-// @match        https://winbonanza.com/*
-// @match        https://thrillcoins.com/*
 // @match        https://play.babacasino.com/*
 // @match        https://lobby.chumbacasino.com/*
 // @match        https://play.clubs.poker/*
@@ -91,6 +89,8 @@
 // @match        https://www.cardcrush.com/*
 // @match        https://www.coinsbackcasino.com/*
 // @match        https://www.play.dogghousecasino.com/*
+// @match        https://winbonanza.com/*
+// @match        https://thrillcoins.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -145,6 +145,184 @@
     });
   }
   // --- End Owner identity ---
+
+  // --- Giveaway Link Rotation ---
+  // Uses the same owner identity as the SC tracker above (getOwner()/scOwner, the
+  // Ben/Cindy/Tyler/Jessica list) — the giveaway-link feature was originally built
+  // against a different example owner list (Scott/Linda/Mom/Barb/Kelly/Trish), but
+  // those were just placeholders and the site confirmed it should be the same 4
+  // owners used everywhere. No separate prompt/GM key needed.
+
+  // Maps this script's existing @match hostnames to the site names used in the
+  // "Last Tried" / "Extra Codes" tabs of the Casino SC Tracking sheet.
+  const GIVEAWAY_SITE_MAP = {
+    'www.playfame.com': 'PlayFame',
+    'www.hellomillions.com': 'HelloMillions',
+    'www.mcluck.com': 'McLuck',
+    'www.spinblitz.com': 'SpinBlitz'
+  };
+  // Standalone Apps Script Web App ("Giveaway Link Rotation Backend") — a separate project
+  // from the SC-tracker's Web App so a bug here can't affect SC submissions. Reads/writes
+  // the "Last Tried" and "Extra Codes" tabs directly via SpreadsheetApp with LockService
+  // protecting the claim's read-check-write sequence.
+  const GIVEAWAY_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbybQNnGdymBC40IlxkFPJ3IuOfheLHb8qbFCSBmGEXwTbcZnAAuda5mzXEBjxlQbxBw/exec';
+
+  function giveawayApiRequest(method, params) {
+    return new Promise((resolve, reject) => {
+      const qs = new URLSearchParams(params).toString();
+      const opts = {
+        method,
+        url: method === 'GET' ? `${GIVEAWAY_BACKEND_URL}?${qs}` : GIVEAWAY_BACKEND_URL,
+        timeout: 20000,
+        onload: (response) => {
+          try {
+            resolve(JSON.parse(response.responseText));
+          } catch (e) {
+            reject(new Error('Bad response from giveaway link backend.'));
+          }
+        },
+        onerror: () => reject(new Error('Network error contacting giveaway link backend.')),
+        ontimeout: () => reject(new Error('Timed out contacting giveaway link backend.'))
+      };
+      if (method === 'POST') {
+        opts.data = qs;
+        opts.headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+      }
+      GM_xmlhttpRequest(opts);
+    });
+  }
+
+  // Popup: shows whether this owner is off cooldown for this site and, if so, lets them
+  // claim an unused link from "Extra Codes" — which logs today's date in "Last Tried" and
+  // marks that code row "Used" (never deletes it, per the sheet's design).
+  function openGiveawayLinkModal(site) {
+    const container = document.createElement('div');
+    const shadow = container.attachShadow({ mode: 'open' });
+    Object.assign(container.style, {
+      position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+      zIndex: '1000003', maxWidth: '380px', width: '90vw'
+    });
+
+    const style = document.createElement('style');
+    style.textContent = `
+      .gl-modal { all: initial; font: 14px/1.4 Arial, Helvetica, sans-serif;
+        background:#fff; padding:18px; border:2px solid #000; border-radius:8px;
+        box-shadow:0 4px 8px rgba(0,0,0,0.2); color:#000; display:block; box-sizing:border-box; }
+      .gl-modal * { box-sizing:border-box; font: inherit; }
+      .gl-modal h3 { margin:0 0 10px; font-size:16px; }
+      .gl-owner { font-size:12px; color:#555; margin-bottom:10px; }
+      .gl-owner a { color:#2196F3; cursor:pointer; text-decoration:underline; }
+      .gl-status { font-size:13px; margin-bottom:14px; min-height:18px; }
+      .gl-btn { width:100%; padding:10px; border:none; border-radius:4px; cursor:pointer; color:#fff; font-size:13px; margin-bottom:8px; }
+    `;
+    shadow.appendChild(style);
+
+    const modal = document.createElement('div');
+    modal.className = 'gl-modal';
+
+    const title = document.createElement('h3');
+    title.textContent = `🔗 Giveaway Link — ${site}`;
+    modal.appendChild(title);
+
+    const ownerLine = document.createElement('div');
+    ownerLine.className = 'gl-owner';
+    modal.appendChild(ownerLine);
+
+    const status = document.createElement('div');
+    status.className = 'gl-status';
+    status.textContent = 'Checking…';
+    modal.appendChild(status);
+
+    const claimBtn = document.createElement('button');
+    claimBtn.type = 'button';
+    claimBtn.className = 'gl-btn';
+    claimBtn.style.background = '#4CAF50';
+    claimBtn.textContent = '🔗 Claim & Open Link';
+    claimBtn.style.display = 'none';
+    modal.appendChild(claimBtn);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'gl-btn';
+    closeBtn.style.background = '#f44336';
+    closeBtn.textContent = 'Close';
+    modal.appendChild(closeBtn);
+
+    shadow.appendChild(modal);
+    document.body.appendChild(container);
+    const stopKeepAlive = keepElementAlive(container);
+    closeBtn.onclick = () => { stopKeepAlive(); document.body.removeChild(container); };
+
+    function renderOwnerLine(owner) {
+      ownerLine.innerHTML = '';
+      ownerLine.append(`Owner: ${owner} `);
+      const changeLink = document.createElement('a');
+      changeLink.textContent = '(change)';
+      changeLink.onclick = () => {
+        const newOwner = promptForOwner(GM_getValue('scOwner', ''));
+        GM_setValue('scOwner', newOwner);
+        refresh();
+      };
+      ownerLine.appendChild(changeLink);
+    }
+
+    function refresh() {
+      const owner = getOwner();
+      renderOwnerLine(owner);
+      status.textContent = 'Checking…';
+      status.style.color = '#666';
+      claimBtn.style.display = 'none';
+      giveawayApiRequest('GET', { action: 'status', site, owner }).then((result) => {
+        if (!result.ok) {
+          status.textContent = `❌ ${result.error}`;
+          status.style.color = '#f44336';
+          return;
+        }
+        if (result.onCooldown) {
+          status.textContent = `⏳ On cooldown — last used ${result.lastTried}. ${result.daysRemaining} day(s) left.`;
+          status.style.color = '#ff9800';
+        } else if (!result.hasCode) {
+          status.textContent = '⚠️ Off cooldown, but no unused link saved for this site in "Extra Codes" yet.';
+          status.style.color = '#ff9800';
+        } else {
+          status.textContent = "✅ Available! Click below to claim a link and log today's date.";
+          status.style.color = '#4CAF50';
+          claimBtn.style.display = '';
+        }
+      }).catch((err) => {
+        status.textContent = `❌ ${err.message}`;
+        status.style.color = '#f44336';
+      });
+    }
+
+    claimBtn.onclick = () => {
+      claimBtn.disabled = true;
+      claimBtn.textContent = 'Claiming…';
+      const owner = getOwner();
+      giveawayApiRequest('POST', { action: 'claim', site, owner }).then((result) => {
+        if (!result.ok) {
+          status.textContent = `❌ ${result.error === 'cooldown' ? `Still on cooldown — ${result.daysRemaining} day(s) left.` : result.error}`;
+          status.style.color = '#f44336';
+          claimBtn.style.display = 'none';
+          claimBtn.disabled = false;
+          claimBtn.textContent = '🔗 Claim & Open Link';
+          return;
+        }
+        window.open(result.link, '_blank');
+        status.textContent = '✅ Claimed and opened — date logged in "Last Tried".';
+        status.style.color = '#4CAF50';
+        claimBtn.style.display = 'none';
+      }).catch((err) => {
+        status.textContent = `❌ ${err.message}`;
+        status.style.color = '#f44336';
+        claimBtn.disabled = false;
+        claimBtn.textContent = '🔗 Claim & Open Link';
+      });
+    };
+
+    refresh();
+  }
+  // --- End Giveaway Link Rotation ---
 
   // Config
   const numericRegex = /^\d{1,3}(,\d{3})*(\.\d+)?$/;
@@ -1439,7 +1617,18 @@
     const closeXButton = document.createElement('button');
     closeXButton.textContent = 'X';
     Object.assign(closeXButton.style, { padding:'5px 8px', background:'#f44336', color:'#fff', border:'none', borderRadius:'4px', cursor:'pointer' });
-    buttonContainer.appendChild(triggerButton); buttonContainer.appendChild(apiPickerButton); buttonContainer.appendChild(closeXButton);
+    buttonContainer.appendChild(triggerButton); buttonContainer.appendChild(apiPickerButton);
+    // Giveaway Link Rotation button — only on the 4 sites that have a "Last Tried" /
+    // "Extra Codes" row in the sheet (see GIVEAWAY_SITE_MAP above).
+    const giveawaySite = GIVEAWAY_SITE_MAP[window.location.hostname];
+    if (giveawaySite) {
+      const giveawayButton = document.createElement('button');
+      giveawayButton.textContent = '🔗 Giveaway Link';
+      Object.assign(giveawayButton.style, { padding:'10px', background:'#4CAF50', color:'#fff', border:'none', borderRadius:'4px', cursor:'pointer' });
+      giveawayButton.onclick = () => openGiveawayLinkModal(giveawaySite);
+      buttonContainer.appendChild(giveawayButton);
+    }
+    buttonContainer.appendChild(closeXButton);
     document.body.appendChild(buttonContainer);
     const stopButtonsKeepAlive = keepElementAlive(buttonContainer);
     closeXButton.onclick = () => { stopButtonsKeepAlive(); document.body.removeChild(buttonContainer); };
