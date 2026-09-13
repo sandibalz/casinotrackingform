@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.6.4
+// @version      1.6.5
 // @description  Detects bonus popups, daily prize COLLECT, grand prize COLLECT, any "Collect" / "Claim Now" button anywhere on the page (including image-based Claim Now popups), CLAIM PRIZE / SPIN & WIN buttons for 1 min after launch, and auto-presses the Login button once the email + password fields are filled, on RealPrize and LoneStar Casino
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -28,6 +28,9 @@
 //          LoneStar popup used aria-label="Claim reward" with no visible
 //          button text, so the image-based path's aria-label fallback was
 //          never matching)
+// v1.6.5 – added @updateURL/@downloadURL header (Tampermonkey already had
+//          it set in its own per-script settings; the script file itself
+//          just never documented it)
 (function () {
     'use strict';
 
