@@ -8,6 +8,8 @@
 // @match        *://*.lonestarcasino.com/*
 // @grant        none
 // @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/realprizeautoclaim.user.js
+// @downloadURL  https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/realprizeautoclaim.user.js
 // ==/UserScript==
 //
 // NOTE: if you see NO "[AutoClaim]" lines in the console on the page that has the
