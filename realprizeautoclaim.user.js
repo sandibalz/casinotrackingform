@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.6.3
+// @version      1.6.4
 // @description  Detects bonus popups, daily prize COLLECT, grand prize COLLECT, any "Collect" / "Claim Now" button anywhere on the page (including image-based Claim Now popups), CLAIM PRIZE / SPIN & WIN buttons for 1 min after launch, and auto-presses the Login button once the email + password fields are filled, on RealPrize and LoneStar Casino
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -22,13 +22,17 @@
 //          throttled the tryPressLogin DOM walk to ~2x/sec, and stopped
 //          re-clicking the same launch button (CLAIM PRIZE/SPIN & WIN) node
 //          repeatedly
+// v1.6.4 – widened CLAIM_TEXT_RE to also match "claim reward" (icon-only
+//          LoneStar popup used aria-label="Claim reward" with no visible
+//          button text, so the image-based path's aria-label fallback was
+//          never matching)
 (function () {
     'use strict';
 
     const POLL_INTERVAL_MS       = 800;
     const CLAIM_COOLDOWN_MS      = 5000;
     const GRAND_PRIZE_DELAYS_MS  = [5000, 7500, 10000];
-    const CLAIM_TEXT_RE          = /\b(claim\s*now|collect|claim\s*bonus)\b/i;
+    const CLAIM_TEXT_RE          = /\b(claim\s*now|collect|claim\s*bonus|claim\s*reward)\b/i;
 
     // Launch-window button scan
     const LAUNCH_SCAN_DURATION_MS = 60000;
