@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.7.0
+// @version      1.7.1
 // @description  Detects bonus popups, daily prize COLLECT, grand prize COLLECT, any "Collect" / "Claim Now" button anywhere on the page (including image-based Claim Now popups), and CLAIM PRIZE / SPIN & WIN buttons for 1 min after launch, on RealPrize and LoneStar Casino
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -36,6 +36,18 @@
 //          is now handled by the AutoLogin Sites Chrome extension, which
 //          dispatches genuinely trusted clicks (chrome.debugger) — this
 //          script's synthetic-event clicks could never reliably do that
+// v1.7.1 – fixed findImageBasedClaimNow's last-resort fallback: the
+//          unbounded img.closest('...[class*="btn"]...') walk had no depth
+//          limit, so on realprize.com it matched all the way up to the
+//          game-lobby carousel/banner wrapper (whose class happened to
+//          contain "button") instead of an actual small Claim Now element.
+//          That made the script repeatedly "click" the entire banner
+//          (hundreds of game tiles) many times per second, which in turn
+//          crashed the site's own click handler (TypeError: Cannot read
+//          properties of undefined (reading 'id') in site_120n.js). Added
+//          a text-length guard (<200 chars) so an oversized match — a sign
+//          .closest() grabbed something far bigger than a button — is
+//          skipped instead of clicked.
 (function () {
     'use strict';
 
@@ -282,7 +294,13 @@
             const clickableParent = img.closest('button, a, [role="button"], [onclick], [class*="btn" i], [class*="button" i]');
             if (clickableParent && isVisibleLoose(clickableParent)) {
                 const ariaLabel = clickableParent.getAttribute('aria-label') || '';
-                if (CLAIM_TEXT_RE.test(cleanText(clickableParent)) || CLAIM_TEXT_RE.test(ariaLabel)) {
+                const parentText = cleanText(clickableParent);
+                // Guard: .closest() has no depth limit, so on this site it can walk
+                // past the real button and match a huge ancestor (e.g. the whole
+                // carousel/banner wrapper, whose class happens to contain "button").
+                // A real Claim Now element's text is short; anything long means we
+                // grabbed something far bigger than a button — skip it.
+                if (parentText.length < 200 && (CLAIM_TEXT_RE.test(parentText) || CLAIM_TEXT_RE.test(ariaLabel))) {
                     return clickableParent;
                 }
             }
