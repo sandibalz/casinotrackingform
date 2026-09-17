@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.7.1
+// @version      1.7.2
 // @description  Detects bonus popups, daily prize COLLECT, grand prize COLLECT, any "Collect" / "Claim Now" button anywhere on the page (including image-based Claim Now popups), and CLAIM PRIZE / SPIN & WIN buttons for 1 min after launch, on RealPrize and LoneStar Casino
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -48,6 +48,14 @@
 //          a text-length guard (<200 chars) so an oversized match — a sign
 //          .closest() grabbed something far bigger than a button — is
 //          skipped instead of clicked.
+// v1.7.2 – v1.7.1 only fixed the *last-resort* closest() fallback, but the
+//          real culprit was one loop up: the "walk up to 8 ancestor levels"
+//          loop's "is the parent itself a clickable claim element" check had
+//          no size guard at all, so on realprize.com it matched the same
+//          oversized carousel/banner container well before ever reaching
+//          the last-resort branch — confirmed still reproducing after the
+//          v1.7.1 fix. Added the identical <200-char length guard to that
+//          check too.
 (function () {
     'use strict';
 
@@ -280,8 +288,15 @@
                     }
                 }
 
-                // Also check if the parent itself is a clickable claim element
-                if (CLAIM_TEXT_RE.test(cleanText(parent)) && isVisibleLoose(parent)) {
+                // Also check if the parent itself is a clickable claim element.
+                // Same <200-char length guard as the last-resort branch below:
+                // this walk goes up to 8 ancestor levels, which on realprize.com
+                // was already enough to reach the surrounding carousel/banner
+                // (hundreds of chars of unrelated game-tile text) before ever
+                // finding a real button. Anything that long isn't a Claim Now
+                // element — skip it instead of clicking it.
+                const parentText = cleanText(parent);
+                if (parentText.length < 200 && CLAIM_TEXT_RE.test(parentText) && isVisibleLoose(parent)) {
                     return parent;
                 }
 
