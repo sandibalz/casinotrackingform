@@ -1,14 +1,12 @@
 // ==UserScript==
 // @name Multi-Site Giveaway Auto-Clicker
 // @namespace http://tampermonkey.net/
-// @version 1.9.1
+// @version 1.10.0
 // @description Automatically clicks giveaway buttons — now relentlessly clicks until "Subscribed" on Playfame group
 // @author Anonymous
 // @match https://*.playfame.com/*
 // @match https://*.mcluck.com/*
 // @match https://*.hellomillions.com/*
-// @match https://*.lonestarcasino.com/*
-// @match https://*.realprize.com/*
 // @match https://*.spinblitz.com/*
 // @match https://*.cardcrush.com/*
 // @run-at document-idle
@@ -16,6 +14,16 @@
 // @updateURL https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/giveawayautoclicker.user.js
 // @downloadURL https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/giveawayautoclicker.user.js
 // ==/UserScript==
+// v1.10.0 – removed lonestarcasino.com/realprize.com support (dropped the
+//           two @match lines, the handleLonestarGroup branch in handlePage,
+//           and the handleLonestarGroup method itself). That LoneStar-group
+//           fixed 3-loop click sequence was racing tampermonkey-
+//           realprizeautoclaim-canonical.js's continuous popup watcher on
+//           the same .genpop.showitbig / [data-link="get_fs"] claim popup,
+//           and was the likely cause of a live TypeError crash in the
+//           site's own click handler (see that script's v1.7.1 changelog
+//           and this index's Cross-script overlaps note, 9/17/26).
+//           PlayFame group and stake.us logic are untouched.
 (function() {
     'use strict';
     class GiveawayAutomation {
@@ -51,9 +59,6 @@
             }
             else if (this.hostname.includes('stake.us')) {
                 await this.handleStake();
-            }
-            else if (this.hostname.includes('lonestarcasino.com') || this.hostname.includes('realprize.com')) {
-                await this.handleLonestarGroup();
             }
         }
 
@@ -197,37 +202,6 @@
                 if (button) {
                     button.click();
                     console.log("[GiveawayAutomation] Clicked Stake.us giveaway button");
-                    this.createCountdownPopup();
-                    this.startCountdown();
-                }
-            } catch (e) { console.error(e); }
-        }
-
-        async handleLonestarGroup() {
-            console.log("[GiveawayAutomation] Handling LonestarCasino/RealPrize logic");
-            let clickCount = 0;
-            try {
-                for (let i = 1; i <= 3; i++) {
-                    // (your original 3-loop logic — unchanged)
-                    const claimButton = document.querySelector('.claimbon_btn');
-                    if (claimButton && claimButton.textContent.trim().toLowerCase() === 'claim' && this.isElementVisible(claimButton)) {
-                        claimButton.click(); clickCount++;
-                        await this.sleep(1000);
-                    }
-                    const popupButton = document.querySelector('#claimnewpop');
-                    if (popupButton && popupButton.textContent.trim().toLowerCase().includes('claim') &&
-                        (this.isElementVisible(popupButton) || document.querySelector('#newpopmsg')?.style.display !== 'none')) {
-                        popupButton.click(); clickCount++;
-                        await this.sleep(2000);
-                    }
-                    const unlockButton = document.querySelector('.genpop.showitbig [data-link="get_fs"]');
-                    if (unlockButton && this.isElementVisible(unlockButton)) {
-                        unlockButton.click(); clickCount++;
-                        await this.sleep(1000);
-                    }
-                    if (i < 3) await this.sleep(3000);
-                }
-                if (clickCount > 0) {
                     this.createCountdownPopup();
                     this.startCountdown();
                 }
