@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.6.5
-// @description  Detects bonus popups, daily prize COLLECT, grand prize COLLECT, any "Collect" / "Claim Now" button anywhere on the page (including image-based Claim Now popups), CLAIM PRIZE / SPIN & WIN buttons for 1 min after launch, and auto-presses the Login button once the email + password fields are filled, on RealPrize and LoneStar Casino
+// @version      1.7.0
+// @description  Detects bonus popups, daily prize COLLECT, grand prize COLLECT, any "Collect" / "Claim Now" button anywhere on the page (including image-based Claim Now popups), and CLAIM PRIZE / SPIN & WIN buttons for 1 min after launch, on RealPrize and LoneStar Casino
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
 // @match        *://*.lonestarcasino.com/*
@@ -31,6 +31,11 @@
 // v1.6.5 – added @updateURL/@downloadURL header (Tampermonkey already had
 //          it set in its own per-script settings; the script file itself
 //          just never documented it)
+// v1.7.0 – removed auto-login (tryPressLogin and all its login-only helpers
+//          and config); login on both realprize.com and lonestarcasino.com
+//          is now handled by the AutoLogin Sites Chrome extension, which
+//          dispatches genuinely trusted clicks (chrome.debugger) — this
+//          script's synthetic-event clicks could never reliably do that
 (function () {
     'use strict';
 
@@ -47,13 +52,6 @@
         { name: 'SPIN & WIN',  re: /spin\s*&\s*win/i }
     ];
 
-    // Auto-login config
-    const LOGIN_COOLDOWN_MS  = 3000;
-    const LOGIN_MIN_PW_LEN   = 6;
-    const MAX_LOGIN_SUBMITS  = 3;
-    const LOGIN_SUBMIT_RE    = /^(log\s?in|sign\s?in|log\s?in\s?now)$/i;
-    const LOGIN_EMAIL_OPT_RE = /^(log|sign)\s?in\s+with\s+e-?mail$/i;
-    const LOGIN_OPENER_RE    = /^(log\s?in|sign\s?in)$/i;
 
     let lastClaimAt        = 0;
     let grandPrizeArmed    = false;
@@ -61,11 +59,6 @@
     let launchScanUntil    = 0;
     let launchScanTimer    = null;
     let lastLaunchCheckAt  = 0;
-    let lastLoginActionAt  = 0;
-    let loginSubmits       = 0;
-    let loginComplete      = false;
-    let loginModalOpened   = false;
-    let lastLoginScanAt    = 0;   // throttles the expensive tryPressLogin DOM walk
     const clickedLaunchButtons = new WeakSet(); // avoid re-clicking the same node
 
     // ── Helpers ────────────────────────────────────────────────────────────────
@@ -172,106 +165,11 @@
     }
 
     // ── Auto-login helpers ────────────────────────────────────────────────────
-    function loginClickable(el) {
-        if (!el) return false;
-        if (el.disabled) return false;
-        if (el.getAttribute && el.getAttribute('aria-disabled') === 'true') return false;
-        return isVisibleLoose(el);
-    }
-
+    // (tryPressLogin and its other login-only helpers were removed in v1.7.0 —
+    // see changelog above. innermostOnly is kept: findAnyCollectButton still
+    // uses it.)
     function innermostOnly(list) {
         return list.filter(el => !list.some(other => other !== el && el.contains(other)));
-    }
-
-    function matchLoginControls(re) {
-        const raw = gatherDeep('button, a, [role="button"], [class*="btn" i], [class*="button" i]');
-        const hit = raw.filter(el => re.test(cleanText(el)) && loginClickable(el));
-        return innermostOnly(hit);
-    }
-
-    function visibleFilledPassword() {
-        return gatherDeep('input[type="password"]').find(
-            i => isVisibleLoose(i) && i.value && i.value.length >= LOGIN_MIN_PW_LEN
-        ) || null;
-    }
-
-    function anyVisiblePassword() {
-        return gatherDeep('input[type="password"]').some(isVisibleLoose);
-    }
-
-    function emailFieldReady() {
-        const users = gatherDeep('input').filter(i => {
-            if (!isVisibleLoose(i)) return false;
-            const type = (i.type || 'text').toLowerCase();
-            if (type === 'email') return true;
-            if (type !== 'text' && type !== 'tel') return false;
-            const meta = `${i.name || ''} ${i.id || ''} ${i.autocomplete || ''} ${i.placeholder || ''}`.toLowerCase();
-            return /(e-?mail|user|login|phone|account)/.test(meta);
-        });
-        if (users.length === 0) return true;
-        return users.some(i => i.value && i.value.trim());
-    }
-
-    function tryPressLogin() {
-        if (loginComplete) return;
-        if (now() - lastLoginActionAt < LOGIN_COOLDOWN_MS) return;
-
-        const pw = visibleFilledPassword();
-        if (pw) {
-            const form = pw.closest('form');
-            let submit = null;
-            if (form) {
-                submit = innermostOnly(
-                    [...form.querySelectorAll('button, [role="button"], input[type="submit"]')].filter(b =>
-                        loginClickable(b) && (
-                            LOGIN_SUBMIT_RE.test(cleanText(b)) ||
-                            (b.type === 'submit' && LOGIN_SUBMIT_RE.test((b.value || '').trim()))
-                        )
-                    )
-                )[0] || null;
-
-                if (!submit) {
-                    const submits = [...form.querySelectorAll('button[type="submit"], input[type="submit"]')]
-                        .filter(loginClickable);
-                    if (submits.length === 1) submit = submits[0];
-                }
-            }
-            if (!submit) {
-                submit = matchLoginControls(LOGIN_SUBMIT_RE).find(b => b.tagName !== 'A') || null;
-            }
-            if (submit && emailFieldReady()) {
-                log(`Login fields filled → pressing "${cleanText(submit) || submit.value || 'submit'}"`);
-                robustClick(submit);
-                lastLoginActionAt = now();
-                if (++loginSubmits >= MAX_LOGIN_SUBMITS) {
-                    loginComplete = true;
-                    log(`Reached ${MAX_LOGIN_SUBMITS} login attempts – auto-login disabled for this page load`);
-                }
-            } else if (submit) {
-                log('Password filled but email field still empty – waiting for autofill');
-            }
-            return;
-        }
-
-        const emailOpt = matchLoginControls(LOGIN_EMAIL_OPT_RE)[0];
-        if (emailOpt) {
-            log('Opening "Login with Email" pane');
-            robustClick(emailOpt);
-            lastLoginActionAt = now();
-            return;
-        }
-
-        if (anyVisiblePassword()) return;
-
-        if (!loginModalOpened) {
-            const opener = matchLoginControls(LOGIN_OPENER_RE)[0];
-            if (opener) {
-                log('Opening login modal');
-                robustClick(opener);
-                loginModalOpened = true;
-                lastLoginActionAt = now();
-            }
-        }
     }
 
     // ── Grand prize COLLECT ────────────────────────────────────────────────────
@@ -408,14 +306,6 @@
     }
 
     function scanAndClaim() {
-        // Throttle the login DOM walk to at most ~2x/sec – it was previously
-        // running on every single MutationObserver firing (unbounded), which
-        // is the main source of the CPU spikes/freezes on pages with live
-        // animations (spinning wheel, countdown ticks, etc).
-        if (now() - lastLoginScanAt >= 500) {
-            lastLoginScanAt = now();
-            try { tryPressLogin(); } catch (e) { log('login attempt error: ' + e.message); }
-        }
         if (onCooldown()) return;
 
         // 1. Generic bonus popups
@@ -515,7 +405,6 @@
     // Re-arm on SPA navigation
     (function hookSpaNav() {
         const fire = () => {
-            loginModalOpened = false;
             armLaunchScan('SPA navigation');
         };
         for (const fn of ['pushState', 'replaceState']) {
@@ -556,6 +445,5 @@
     // ── Polling fallback ───────────────────────────────────────────────────────
     setInterval(scanAndClaim, POLL_INTERVAL_MS);
     armLaunchScan('page load');
-    try { tryPressLogin(); } catch (_) {}
-    log(`Loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), launch buttons, and login…`);
+    log(`Loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), and launch buttons…`);
 })();
