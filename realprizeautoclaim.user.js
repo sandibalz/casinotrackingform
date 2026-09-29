@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.7.2
+// @version      1.8.1
 // @description  Detects bonus popups, daily prize COLLECT, grand prize COLLECT, any "Collect" / "Claim Now" button anywhere on the page (including image-based Claim Now popups), and CLAIM PRIZE / SPIN & WIN buttons for 1 min after launch, on RealPrize and LoneStar Casino
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -56,6 +56,16 @@
 //          the last-resort branch — confirmed still reproducing after the
 //          v1.7.1 fix. Added the identical <200-char length guard to that
 //          check too.
+// v1.8.0 – realprize.com only: daily prize COLLECT and grand prize COLLECT
+//          are no longer clicked here (moved to the Collector-App "RealPrize"
+//          profile). Every other path (broad search, image popups, generic
+//          popups) also skips anything inside #daily_prize_wrap on that site.
+//          Gifts, Claim Now popups and CLAIM PRIZE / SPIN & WIN unchanged.
+//          LoneStar keeps the daily collect in this script for now.
+// v1.8.1 – LoneStar only: logs/saves what it clicks and any daily-prize
+//          popup it sees (localStorage 'autoclaim_lonestar_dumps', console
+//          [AutoClaim][dump]) so the daily can be moved to Collector-App.
+//          Clicking behaviour unchanged.
 (function () {
     'use strict';
 
@@ -63,6 +73,39 @@
     const CLAIM_COOLDOWN_MS      = 5000;
     const GRAND_PRIZE_DELAYS_MS  = [5000, 7500, 10000];
     const CLAIM_TEXT_RE          = /\b(claim\s*now|collect|claim\s*bonus|claim\s*reward)\b/i;
+
+    // v1.8.0: on realprize.com the daily-prize popup (#daily_prize_wrap, incl.
+    // its grand-prize COLLECT) is claimed by the Collector-App "RealPrize"
+    // profile instead, so this script leaves it alone there. LoneStar unchanged.
+    const DAILY_VIA_COLLECTOR = /(^|\.)realprize\.com$/i.test(location.hostname);
+    function inDailyPopup(el) {
+        return DAILY_VIA_COLLECTOR && !!(el && el.closest && el.closest('#daily_prize_wrap'));
+    }
+
+    // v1.8.1: LoneStar only - records what gets clicked (and any daily-prize
+    // popup it sees) so the daily reward can be moved to Collector-App later.
+    // Saved in this site's localStorage 'autoclaim_lonestar_dumps' (last 15)
+    // and logged to the console as [AutoClaim][dump]. Doesn't change clicking.
+    const IS_LONESTAR = /(^|\.)lonestarcasino\.com$/i.test(location.hostname);
+    const dumpedNodes = new WeakSet();
+    function dumpForCollector(reason, el) {
+        if (!IS_LONESTAR || !el || dumpedNodes.has(el)) return;
+        dumpedNodes.add(el);
+        try {
+            const box = el.closest('[role="dialog"], [aria-modal="true"]') || el;
+            const entry = {
+                at: new Date().toISOString(),
+                reason: reason,
+                target: el.outerHTML.slice(0, 2000),
+                box: box.outerHTML.slice(0, 30000)
+            };
+            console.log('[AutoClaim][dump]', entry);
+            const key = 'autoclaim_lonestar_dumps';
+            const list = JSON.parse(localStorage.getItem(key) || '[]');
+            list.push(entry);
+            localStorage.setItem(key, JSON.stringify(list.slice(-15)));
+        } catch (_) {}
+    }
 
     // Launch-window button scan
     const LAUNCH_SCAN_DURATION_MS = 60000;
@@ -95,6 +138,7 @@
     // ── Human-like click emulation ─────────────────────────────────────────────
     function humanClick(el) {
         if (!el) return;
+        dumpForCollector('click', el);
 
         const rect = el.getBoundingClientRect();
         const x = rect.left + rect.width  * (0.35 + Math.random() * 0.3);
@@ -258,7 +302,7 @@
         );
 
         const visible = candidates.filter(el => {
-            if (!isVisibleLoose(el)) return false;
+            if (!isVisibleLoose(el) || inDailyPopup(el)) return false;
             if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
             const text = cleanText(el);
             return CLAIM_TEXT_RE.test(text);
@@ -273,7 +317,7 @@
         const imgs = gatherDeep('img[src*="cdn.lonestarcasino.com/pops/"], img[src*="/pops/"]');
 
         for (const img of imgs) {
-            if (!isVisibleLoose(img)) continue;
+            if (!isVisibleLoose(img) || inDailyPopup(img)) continue;
 
             // Walk up a few levels looking for a Claim Now / Collect button
             let parent = img.parentElement;
@@ -281,7 +325,7 @@
                 // Search inside this parent for a claim/collect button
                 const btns = parent.querySelectorAll('button, a, [role="button"], [class*="btn" i], [class*="button" i]');
                 for (const btn of btns) {
-                    if (!isVisibleLoose(btn)) continue;
+                    if (!isVisibleLoose(btn) || inDailyPopup(btn)) continue;
                     if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') continue;
                     if (CLAIM_TEXT_RE.test(cleanText(btn))) {
                         return btn;
@@ -339,12 +383,16 @@
     }
 
     function scanAndClaim() {
+        if (IS_LONESTAR) {
+            const dp = document.querySelector('[class*="daily-prize"]');
+            if (dp) dumpForCollector('daily-prize element seen', dp);
+        }
         if (onCooldown()) return;
 
         // 1. Generic bonus popups
         const popups = document.querySelectorAll('.genpop.showitbig');
         for (const popup of popups) {
-            if (!isVisible(popup)) continue;
+            if (!isVisible(popup) || inDailyPopup(popup)) continue;
             const target = findClaimTarget(popup);
             if (!target) continue;
             log(`Popup found → clicking: ${target.tagName} [data-link="${popup.getAttribute('data-link')}"]`);
@@ -353,10 +401,10 @@
         }
 
         // 2. Grand prize collect
-        if (checkGrandPrizeCollect()) return;
+        if (!DAILY_VIA_COLLECTOR && checkGrandPrizeCollect()) return;
 
         // 3. Regular daily COLLECT
-        checkDailyCollect();
+        if (!DAILY_VIA_COLLECTOR) checkDailyCollect();
 
         // 4. Image-based Claim Now popup (the new one you reported)
         const imageClaim = findImageBasedClaimNow();
