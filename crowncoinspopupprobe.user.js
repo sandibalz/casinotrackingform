@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         CrownCoins Popup Probe
 // @namespace    sandibalz
-// @version      0.1.0
-// @description  v0.1.0 (10/6/26) Test harness for the Collector-App CrownCoinsCasino profile. Watches/logs every popup/overlay (log-only by default). "Run Test": settle + popup sweeps -> read GC+SC (flip CC/SC and back) -> hamburger > Rewards > Daily Bonus tile -> CLOSES the Daily Bonus popup WITHOUT claiming (never clicks the canvas or anything containing it) -> read GC+SC again. Each close tries X button, Escape, backdrop click and records which worked. Leave Auto-run/Auto-close OFF during real Collector-App runs so the two don't race.
+// @version      0.1.1
+// @description  v0.1.1 (10/6/26): a wrapper div filled by an iframe (Crown Jackpot div._cover_ around the minigames frame) now hands the close to the probe copy running inside that frame (X click there), and the frame reply lists its buttons; eventTrigger purchase offer + Jackpot named correctly. v0.1.0: Test harness for the Collector-App CrownCoinsCasino profile. Watches/logs every popup/overlay (log-only by default). "Run Test": settle + popup sweeps -> read GC+SC (flip CC/SC and back) -> hamburger > Rewards > Daily Bonus tile -> CLOSES the Daily Bonus popup WITHOUT claiming (never clicks the canvas or anything containing it) -> read GC+SC again. Each close tries X button, Escape, backdrop click and records which worked. Leave Auto-run/Auto-close OFF during real Collector-App runs so the two don't race.
 // @match        https://crowncoinscasino.com/*
 // @match        https://*.crowncoinscasino.com/*
 // @grant        GM_setValue
@@ -17,7 +17,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.0';
+  const VERSION = '0.1.1';
   const IS_TOP = window.top === window;
 
   const SEL = {
@@ -54,6 +54,8 @@
     if (el.id) return `${tag}#${el.id}`;
     const tid = el.getAttribute('data-testid');
     if (tid) return `${tag}[data-testid="${tid}"]`;
+    const al = el.getAttribute('aria-label');
+    if (al) return `${tag}[aria-label="${al}"]`;
     const data = el.getAttribute('data');
     const parts = cls(el).split(/\s+/).filter(Boolean).slice(0, 2).map(c => {
       const m = c.match(/^(_?[A-Za-z][A-Za-z0-9]*)_[a-z0-9]{4,6}_\d+$/);
@@ -63,7 +65,11 @@
   }
 
   function knownName(n) {
-    const c = cls(n) + ' ' + (n.getAttribute && (n.getAttribute('data') || '')) + ' ' + (n.src || '');
+    const innerFr = n.querySelector && n.querySelector('iframe');
+    const c = cls(n) + ' ' + n.id + ' ' + (n.getAttribute && (n.getAttribute('data') || '')) + ' ' + (n.src || '') +
+      ' ' + (innerFr ? (innerFr.getAttribute('data') || '') + ' ' + (innerFr.src || '') : '');
+    if (/eventTrigger/i.test(c)) return 'Purchase offer (eventTrigger)';
+    if (/metagames|minigames|jackpot/i.test(c)) return 'Crown Jackpot / metagames iframe';
     if (hasCanvas(n) && /_portal_|_content_/.test(c + ' ' + (n.innerHTML || '').slice(0, 300))) return 'Daily Bonus popup (canvas - tapping it CLAIMS)';
     if (hasCanvas(n)) return 'Canvas popup (maybe Daily Bonus)';
     if (/metagames|jackpot/i.test(c)) return 'Crown Jackpot / metagames iframe';
@@ -203,7 +209,9 @@
       const d = e.data;
       if (!d || d.ccprobe !== 'close') return;
       const ovs = findOverlays(document, true);
-      const reply = { ccprobeReply: d.id, host: location.host, overlays: ovs.map(describe), ok: false, how: '', tried: [] };
+      const reply = { ccprobeReply: d.id, host: location.host, overlays: ovs.map(describe), ok: false, how: '', tried: [],
+        buttons: [...document.querySelectorAll('button,[role="button"]')].filter(visible).slice(0, 12)
+          .map(b => `${stableSel(b)} "${(b.innerText || '').trim().slice(0, 20)}"`) };
       const roots = ovs.length ? ovs : [document.body];
       for (const root of roots) {
         for (const c of closeCandidates(root)) {
@@ -268,14 +276,24 @@
     });
   }
 
+  function fillingIframe(n) {
+    if (!n.querySelectorAll) return null;
+    const r = n.getBoundingClientRect();
+    for (const f of n.querySelectorAll('iframe')) {
+      const fr = f.getBoundingClientRect();
+      if (visible(f) && fr.width * fr.height >= r.width * r.height * 0.5) return f;
+    }
+    return null;
+  }
+
   async function closeOverlay(n, opts = {}) {
     const d = describe(n), st = stat(n);
     const gone = () => !n.isConnected || !visible(n) || !isHit(n);
     const ok = how => { st.ok[how] = (st.ok[how] || 0) + 1; log('close', `CLOSED ${d.name} ${d.sel} via ${how}`, 'good'); return how; };
     const tried = [];
 
-    // iframe overlay (Crown Jackpot lives here)
-    const fr = n.tagName === 'IFRAME' ? n : null;
+    // iframe overlay (Crown Jackpot lives here) - also a wrapper (e.g. div._cover_) that an iframe fills
+    const fr = n.tagName === 'IFRAME' ? n : fillingIframe(n);
     if (fr) {
       let sameDoc = null;
       try { sameDoc = fr.contentDocument; } catch (e) { /* cross-origin */ }
@@ -289,7 +307,7 @@
         if (!rep) {
           log('close', `${d.name}: cross-origin frame (${d.iframe || 'no src'}) - no probe inside. Add "// @match ${(d.iframe || '').replace(/^(https?:\/\/[^/]+).*/, '$1')}/*" to the header.`, 'warn');
         } else {
-          log('close', `frame ${rep.host}: overlays ${JSON.stringify(rep.overlays)} tried ${rep.tried.join(', ') || 'nothing'}`);
+          log('close', `frame ${rep.host}: overlays ${JSON.stringify(rep.overlays)} tried ${rep.tried.join(', ') || 'nothing'} | buttons in frame: ${rep.buttons.join(', ') || 'none'}`);
           await sleep(500);
           if (rep.ok || gone()) return ok(rep.how || 'frame reported closed');
         }
