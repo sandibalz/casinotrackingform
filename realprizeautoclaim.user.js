@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.8.1
-// @description  Detects bonus popups, daily prize COLLECT, grand prize COLLECT, any "Collect" / "Claim Now" button anywhere on the page (including image-based Claim Now popups), and CLAIM PRIZE / SPIN & WIN buttons for 1 min after launch, on RealPrize and LoneStar Casino
+// @version      1.9.0
+// @description  On RealPrize and LoneStar Casino: clicks daily/grand prize COLLECT and any button whose text says collect / claim / free spins (incl. image-based Claim Now popups, CLAIM PRIZE, SPIN & WIN), and closes popups that show a price (e.g. 4.99, 19.99)
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
 // @match        *://*.lonestarcasino.com/*
@@ -66,46 +66,52 @@
 //          popup it sees (localStorage 'autoclaim_lonestar_dumps', console
 //          [AutoClaim][dump]) so the daily can be moved to Collector-App.
 //          Clicking behaviour unchanged.
+// v1.9.0 – Collector-App no longer clicks the RealPrize / LoneStar daily prize
+//          (those profiles now only open the site every 12h to keep the session
+//          logged in), so this script owns all claiming again:
+//          * removed DAILY_VIA_COLLECTOR / inDailyPopup (v1.8.0): daily prize and
+//            grand prize COLLECT are clicked on realprize.com again
+//          * removed the LoneStar dump code (v1.8.1)
+//          * CLAIM_TEXT_RE now also matches "claim" and "free spin(s)" on their own
+//            (not only "claim now"); generic matches must be short (<=80 chars),
+//            not a countdown ("Claim in 03:12:11"), not disabled, not a link to
+//            another page, and are clicked at most 2 times per element / 6 times
+//            per text per page load (no endless re-click loops)
+//          * NEW popup closer: a modal/dialog/fixed overlay whose text shows a
+//            price ($4.99, 19.99, 9.99 USD ...) is closed (close/X button, "no
+//            thanks" style button, then Escape). Amounts followed by SC/GC/coins/
+//            bonus/free are not treated as prices. Popups the user opened
+//            themselves (trusted click shortly before) are left alone
+//          * claim buttons inside a popup that shows a price are NOT clicked
+//            (could be a purchase button) - SKIP_CLAIM_IN_PRICE_POPUPS
 (function () {
     'use strict';
 
     const POLL_INTERVAL_MS       = 800;
     const CLAIM_COOLDOWN_MS      = 5000;
     const GRAND_PRIZE_DELAYS_MS  = [5000, 7500, 10000];
-    const CLAIM_TEXT_RE          = /\b(claim\s*now|collect|claim\s*bonus|claim\s*reward)\b/i;
+    // v1.9.0: any short "collect" / "claim" / "free spin(s)" button counts
+    // (previously only claim now / collect / claim bonus / claim reward).
+    const CLAIM_TEXT_RE          = /\b(claim|collect|free\s*spins?)\b/i;
+    const GENERIC_TEXT_MAX_LEN   = 80;   // longer text = a paragraph/container, not a button
+    const COUNTDOWN_RE           = /\b\d{1,2}:\d{2}\b|\b(in|available|unlocks?)\s+\d+\s*[dhm]\b/i;
+    const MAX_CLICKS_PER_NODE    = 2;
+    const MAX_CLICKS_PER_TEXT    = 6;
 
-    // v1.8.0: on realprize.com the daily-prize popup (#daily_prize_wrap, incl.
-    // its grand-prize COLLECT) is claimed by the Collector-App "RealPrize"
-    // profile instead, so this script leaves it alone there. LoneStar unchanged.
-    const DAILY_VIA_COLLECTOR = /(^|\.)realprize\.com$/i.test(location.hostname);
-    function inDailyPopup(el) {
-        return DAILY_VIA_COLLECTOR && !!(el && el.closest && el.closest('#daily_prize_wrap'));
-    }
-
-    // v1.8.1: LoneStar only - records what gets clicked (and any daily-prize
-    // popup it sees) so the daily reward can be moved to Collector-App later.
-    // Saved in this site's localStorage 'autoclaim_lonestar_dumps' (last 15)
-    // and logged to the console as [AutoClaim][dump]. Doesn't change clicking.
-    const IS_LONESTAR = /(^|\.)lonestarcasino\.com$/i.test(location.hostname);
-    const dumpedNodes = new WeakSet();
-    function dumpForCollector(reason, el) {
-        if (!IS_LONESTAR || !el || dumpedNodes.has(el)) return;
-        dumpedNodes.add(el);
-        try {
-            const box = el.closest('[role="dialog"], [aria-modal="true"]') || el;
-            const entry = {
-                at: new Date().toISOString(),
-                reason: reason,
-                target: el.outerHTML.slice(0, 2000),
-                box: box.outerHTML.slice(0, 30000)
-            };
-            console.log('[AutoClaim][dump]', entry);
-            const key = 'autoclaim_lonestar_dumps';
-            const list = JSON.parse(localStorage.getItem(key) || '[]');
-            list.push(entry);
-            localStorage.setItem(key, JSON.stringify(list.slice(-15)));
-        } catch (_) {}
-    }
+    // v1.9.0 popup closer
+    const CLOSE_PRICE_POPUPS           = true;  // close popups that show a price
+    const SKIP_CLAIM_IN_PRICE_POPUPS   = true;  // never click collect/claim inside a popup that shows a price
+    const USER_OPENED_GRACE_MS         = 6000;  // popup that appears within this long after a real user click is left alone
+    const CLOSE_RETRY_MS               = 2000;
+    const MAX_CLOSE_TRIES              = 4;
+    // Strong price: has a $ sign or USD ($4.99, $19.99, $5, 9.99 USD).
+    // Weak price: bare 4.99 / 19.99 / x.95 / x.49 - only counts if the popup also has a
+    // purchase word (so a reward like "0.49 SC" in a free popup is never mistaken for a price).
+    const PRICE_STRONG_RE  = /\$\s?\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\b\d+(?:\.\d{2})?\s?USD\b/gi;
+    const PRICE_WEAK_RE    = /\b\d{1,3}(?:,\d{3})*\.(?:99|95|49)\b/g;
+    const PURCHASE_WORD_RE = /\b(buy|purchase|offer|deal|only|special|limited|best\s*value|checkout|pay|order|save|\d+%\s*off|most\s*popular|get\s+(?:it|now|offer))\b/i;
+    const PRICE_NOT_RE_AFTER  = /^\s*(sc|gc|sweeps?|gold|coins?|free|bonus|k\b|m\b)/i;   // "$5 FREE", "2.99 SC"
+    const PROTECTED_POPUP_SEL = '[aria-label*="prize" i], #daily_prize_wrap, #daily_prize_popup'; // never auto-closed
 
     // Launch-window button scan
     const LAUNCH_SCAN_DURATION_MS = 60000;
@@ -135,11 +141,202 @@
         return (now() - lastClaimAt) < CLAIM_COOLDOWN_MS;
     }
 
+    // ── v1.9.0: price detection, popup finding, click guards ───────────────────
+    let lastUserClickAt = 0;
+    ['pointerdown', 'click'].forEach(ev => document.addEventListener(ev, e => {
+        if (e.isTrusted) lastUserClickAt = Date.now();
+    }, true));
+
+    function hasPrice(text) {
+        if (!text) return false;
+        for (const m of text.matchAll(PRICE_STRONG_RE)) {
+            const after = text.slice(m.index + m[0].length, m.index + m[0].length + 14);
+            if (PRICE_NOT_RE_AFTER.test(after)) continue;
+            return true;
+        }
+        if (!PURCHASE_WORD_RE.test(text)) return false;
+        for (const m of text.matchAll(PRICE_WEAK_RE)) {
+            const after  = text.slice(m.index + m[0].length, m.index + m[0].length + 14);
+            const before = text.slice(Math.max(0, m.index - 6), m.index);
+            if (PRICE_NOT_RE_AFTER.test(after) || /\b(sc|gc)\s*$/i.test(before)) continue;
+            return true;
+        }
+        return false;
+    }
+
+    const POPUP_EXPLICIT_SEL = '[role="dialog"], [aria-modal="true"], dialog[open], .genpop.showitbig';
+    const POPUP_LOOSE_SEL    = POPUP_EXPLICIT_SEL + ', [class*="modal" i], [class*="popup" i], [class*="overlay" i], [class*="dialog" i]';
+
+    function isFixedLayer(el) {
+        let n = el;
+        for (let i = 0; i < 6 && n && n !== document.body; i++, n = n.parentElement) {
+            let pos = '';
+            try { pos = window.getComputedStyle(n).position; } catch (_) {}
+            if (pos === 'fixed') return true;
+        }
+        return false;
+    }
+
+    // Visible popup-like layers (outermost only, small enough to be a popup, not the page).
+    function popupRoots() {
+        let nodes;
+        try { nodes = Array.from(document.querySelectorAll(POPUP_LOOSE_SEL)); } catch (_) { return []; }
+        const picked = [];
+        for (const el of nodes) {
+            if (el === document.body || el === document.documentElement) continue;
+            if (!isVisibleLoose(el)) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width < 150 || r.height < 100) continue;
+            const explicit = el.matches(POPUP_EXPLICIT_SEL);
+            if (!explicit && !isFixedLayer(el)) continue;
+            if (cleanText(el).length > 2500) continue; // a page wrapper, not a popup
+            picked.push(el);
+        }
+        return picked.filter(el => !picked.some(o => o !== el && o.contains(el)));
+    }
+
+    // Nearest popup layer around el (or null).
+    function popupAround(el) {
+        let n = el;
+        for (let i = 0; i < 14 && n && n !== document.body; i++, n = n.parentElement) {
+            if (n.matches && n.matches(POPUP_EXPLICIT_SEL)) return n;
+        }
+        n = el;
+        for (let i = 0; i < 14 && n && n !== document.body; i++, n = n.parentElement) {
+            let pos = '';
+            try { pos = window.getComputedStyle(n).position; } catch (_) {}
+            if (pos === 'fixed' && n.getBoundingClientRect().width >= 150) return n;
+        }
+        return null;
+    }
+
+    const nodeClicks = new WeakMap();
+    const textClicks = new Map();
+    function labelOf(el) {
+        return cleanText(el) || (el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title'))) || '';
+    }
+    function noteClick(el) {
+        nodeClicks.set(el, (nodeClicks.get(el) || 0) + 1);
+        const key = labelOf(el).toLowerCase();
+        textClicks.set(key, (textClicks.get(key) || 0) + 1);
+    }
+    // generic = broad text match (strict guards); false = specific popup paths (only the price/loop guards)
+    function allowClick(el, generic) {
+        if (!el) return false;
+        if ((nodeClicks.get(el) || 0) >= MAX_CLICKS_PER_NODE) return false;
+        const label = labelOf(el);
+        if ((textClicks.get(label.toLowerCase()) || 0) >= MAX_CLICKS_PER_TEXT) return false;
+        if (generic) {
+            if (!label || label.length > GENERIC_TEXT_MAX_LEN) return false;
+            if (COUNTDOWN_RE.test(label)) return false;
+            const a = el.closest && el.closest('a[href]');
+            if (a) {
+                try {
+                    const u = new URL(a.getAttribute('href'), location.href);
+                    const here = location.origin + location.pathname + location.search;
+                    if (/^(javascript|mailto|tel):/i.test(a.getAttribute('href'))) return false;
+                    if (u.origin + u.pathname + u.search !== here) return false; // navigates away
+                } catch (_) { return false; }
+            }
+        }
+        if (SKIP_CLAIM_IN_PRICE_POPUPS) {
+            const pop = popupAround(el);
+            if (pop && !pop.matches(PROTECTED_POPUP_SEL) && hasPrice(cleanText(pop))) return false;
+        }
+        return true;
+    }
+
+    // ── v1.9.0: close popups that show a price ─────────────────────────────────
+    const popupState = new WeakMap();
+    function findCloseButton(root) {
+        const all = (sel) => { try { return Array.from(root.querySelectorAll(sel)); } catch (_) { return []; } };
+        const clickable = (el) => {
+            const t = el.closest('button, a, [role="button"]') || el;
+            return (isVisibleLoose(t) && !t.disabled) ? t : null;
+        };
+        const buyish = /\b(buy|purchase|get|claim|collect|spin|play|checkout|pay|\$)/i;
+        // 1) explicitly labelled close controls
+        const explicitSel = ['[aria-label*="close" i]', '[title*="close" i]', '[data-testid*="close" i]',
+            '[data-test*="close" i]', 'img[alt*="close" i]', '[aria-label*="dismiss" i]'];
+        for (const sel of explicitSel) {
+            for (const el of all(sel)) {
+                const t = clickable(el);
+                if (t && !buyish.test(cleanText(t))) return t;
+            }
+        }
+        // 2) class/id based, but only small controls (an X), never big containers
+        for (const el of all('[class*="close" i], [id*="close" i], [class*="dismiss" i]')) {
+            const t = clickable(el);
+            if (!t) continue;
+            const r = t.getBoundingClientRect();
+            if (r.width <= 140 && r.height <= 140 && !buyish.test(cleanText(t))) return t;
+        }
+        // 3) text buttons: x, close, no thanks, maybe later ...
+        for (const el of all('button, a, [role="button"]')) {
+            const txt = cleanText(el);
+            if (/^(×|✕|✖|x|close|no,?\s*thanks|not\s*now|maybe\s*later|skip|dismiss|later)$/i.test(txt) && isVisibleLoose(el) && !el.disabled) return el;
+        }
+        // 4) icon-only small button in the top-right corner of the popup
+        const rr = root.getBoundingClientRect();
+        let best = null, bestRight = -1;
+        for (const el of all('button, [role="button"]')) {
+            if (!isVisibleLoose(el) || el.disabled || cleanText(el)) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width > 90 || r.height > 90) continue;
+            if (r.top > rr.top + rr.height * 0.3 || r.right < rr.left + rr.width * 0.6) continue;
+            if (r.right > bestRight) { best = el; bestRight = r.right; }
+        }
+        return best;
+    }
+
+    function sendEscape() {
+        const opts = { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true };
+        [document.activeElement, document, document.body].forEach(t => {
+            try { if (t) t.dispatchEvent(new KeyboardEvent('keydown', opts)); } catch (_) {}
+            try { if (t) t.dispatchEvent(new KeyboardEvent('keyup', opts)); } catch (_) {}
+        });
+    }
+
+    let lastPopupScanAt = 0;
+    function closePricePopups() {
+        if (!CLOSE_PRICE_POPUPS) return;
+        if (now() - lastPopupScanAt < 700) return; // throttle: mutation bursts must not run this every 150ms
+        lastPopupScanAt = now();
+        const roots = [];
+        for (const root of popupRoots()) {
+            if (root.matches(PROTECTED_POPUP_SEL) || root.querySelector(PROTECTED_POPUP_SEL)) continue;
+            const text = cleanText(root);
+            if (!hasPrice(text)) continue;
+            // Register every price popup the first time it is seen (even if only one is closed per pass),
+            // so "opened by you" is judged against when it APPEARED, not when it got its turn.
+            if (!popupState.has(root)) {
+                const userOpened = (now() - lastUserClickAt) < USER_OPENED_GRACE_MS;
+                popupState.set(root, { tries: 0, last: 0, userOpened });
+                log(`Price popup seen${userOpened ? ' (opened by you - leaving it)' : ''}: "${text.slice(0, 80)}"`);
+            }
+            roots.push(root);
+        }
+        for (const root of roots) {
+            const st = popupState.get(root);
+            if (st.userOpened || st.tries >= MAX_CLOSE_TRIES) continue;
+            if (now() - st.last < CLOSE_RETRY_MS) continue;
+            st.last = now();
+            st.tries++;
+            const btn = st.tries < 3 ? findCloseButton(root) : null;
+            if (btn) {
+                log(`Closing price popup (try ${st.tries}) via "${cleanText(btn) || btn.getAttribute('aria-label') || btn.tagName}"`);
+                humanClick(btn);
+            } else {
+                log(`Closing price popup (try ${st.tries}) via Escape`);
+                sendEscape();
+            }
+            return; // one popup per pass
+        }
+    }
+
     // ── Human-like click emulation ─────────────────────────────────────────────
     function humanClick(el) {
         if (!el) return;
-        dumpForCollector('click', el);
-
         const rect = el.getBoundingClientRect();
         const x = rect.left + rect.width  * (0.35 + Math.random() * 0.3);
         const y = rect.top  + rect.height * (0.35 + Math.random() * 0.3);
@@ -302,10 +499,9 @@
         );
 
         const visible = candidates.filter(el => {
-            if (!isVisibleLoose(el) || inDailyPopup(el)) return false;
+            if (!isVisibleLoose(el)) return false;
             if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
-            const text = cleanText(el);
-            return CLAIM_TEXT_RE.test(text);
+            return CLAIM_TEXT_RE.test(labelOf(el)) && allowClick(el, true);
         });
 
         return innermostOnly(visible);
@@ -317,7 +513,7 @@
         const imgs = gatherDeep('img[src*="cdn.lonestarcasino.com/pops/"], img[src*="/pops/"]');
 
         for (const img of imgs) {
-            if (!isVisibleLoose(img) || inDailyPopup(img)) continue;
+            if (!isVisibleLoose(img)) continue;
 
             // Walk up a few levels looking for a Claim Now / Collect button
             let parent = img.parentElement;
@@ -325,9 +521,9 @@
                 // Search inside this parent for a claim/collect button
                 const btns = parent.querySelectorAll('button, a, [role="button"], [class*="btn" i], [class*="button" i]');
                 for (const btn of btns) {
-                    if (!isVisibleLoose(btn) || inDailyPopup(btn)) continue;
+                    if (!isVisibleLoose(btn)) continue;
                     if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') continue;
-                    if (CLAIM_TEXT_RE.test(cleanText(btn))) {
+                    if (CLAIM_TEXT_RE.test(cleanText(btn)) && allowClick(btn, false)) {
                         return btn;
                     }
                 }
@@ -340,7 +536,7 @@
                 // finding a real button. Anything that long isn't a Claim Now
                 // element — skip it instead of clicking it.
                 const parentText = cleanText(parent);
-                if (parentText.length < 200 && CLAIM_TEXT_RE.test(parentText) && isVisibleLoose(parent)) {
+                if (parentText.length < 200 && CLAIM_TEXT_RE.test(parentText) && isVisibleLoose(parent) && allowClick(parent, false)) {
                     return parent;
                 }
 
@@ -359,7 +555,7 @@
                 // carousel/banner wrapper, whose class happens to contain "button").
                 // A real Claim Now element's text is short; anything long means we
                 // grabbed something far bigger than a button — skip it.
-                if (parentText.length < 200 && (CLAIM_TEXT_RE.test(parentText) || CLAIM_TEXT_RE.test(ariaLabel))) {
+                if (parentText.length < 200 && (CLAIM_TEXT_RE.test(parentText) || CLAIM_TEXT_RE.test(ariaLabel)) && allowClick(clickableParent, false)) {
                     return clickableParent;
                 }
             }
@@ -383,33 +579,33 @@
     }
 
     function scanAndClaim() {
-        if (IS_LONESTAR) {
-            const dp = document.querySelector('[class*="daily-prize"]');
-            if (dp) dumpForCollector('daily-prize element seen', dp);
-        }
+        // v1.9.0: close price popups first (not subject to the claim cooldown)
+        closePricePopups();
         if (onCooldown()) return;
 
         // 1. Generic bonus popups
         const popups = document.querySelectorAll('.genpop.showitbig');
         for (const popup of popups) {
-            if (!isVisible(popup) || inDailyPopup(popup)) continue;
+            if (!isVisible(popup)) continue;
             const target = findClaimTarget(popup);
-            if (!target) continue;
+            if (!target || !allowClick(target, false)) continue;
             log(`Popup found → clicking: ${target.tagName} [data-link="${popup.getAttribute('data-link')}"]`);
+            noteClick(target);
             realClick(target);
             return;
         }
 
         // 2. Grand prize collect
-        if (!DAILY_VIA_COLLECTOR && checkGrandPrizeCollect()) return;
+        if (checkGrandPrizeCollect()) return;
 
         // 3. Regular daily COLLECT
-        if (!DAILY_VIA_COLLECTOR) checkDailyCollect();
+        checkDailyCollect();
 
         // 4. Image-based Claim Now popup (the new one you reported)
         const imageClaim = findImageBasedClaimNow();
         if (imageClaim) {
             log(`Image-based Claim Now popup found → clicking "${cleanText(imageClaim) || imageClaim.tagName}"`);
+            noteClick(imageClaim);
             realClick(imageClaim);
             return;
         }
@@ -423,6 +619,7 @@
             }) || anyCollects[0];
 
             log(`Broad Collect/Claim Now button found → clicking "${cleanText(best)}"`);
+            noteClick(best);
             realClick(best);
         }
     }
