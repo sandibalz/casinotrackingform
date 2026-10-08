@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Casino Google Form Input (Reliable + Lightweight)
 // @namespace    http://tampermonkey.net/
-// @version      1.69.0
+// @version      1.70.0
 // @description  Popup form to submit SC data to a Google Form; full per-site detection with centralized helpers; trimmed CSS; reduced polling overhead; consistent auto-submit. Element picker for custom SC selectors, plus an API/network (fetch/XHR/WebSocket) value picker that supports combining two separately-captured values (e.g. redeemable + non-redeemable SC) into one summed total. Form closes instantly on Submit instead of waiting on the server round trip. Owner is no longer hardcoded — chosen once per browser and saved locally, so this one file works for every owner and survives auto-updates. Added 19 casino/site matches found missing from the bookmarks bar (Midnight Reset, 24 Hour Timer, AutoCollect folders). Added a fortunewins.com balance entry (÷100 scaling) — fortunecoins.com redirects there, so the old entry never actually fired. The Auto Login & Collect feature (briefly bundled here in v1.61.0) was moved out to its own separate userscript, autocollect.user.js, so it can be enabled/disabled independently of this SC-tracking script. Both submission paths retry (up to 2 extra attempts with backoff) on a network error or timeout. Auto-submit's fixed 10s post-load delay is randomized 10-15s to spread out multiple tabs. Submissions now POST directly to the Google Form (bypassing the Apps Script Web App entirely for appends) — the Web App's per-request read/scan/write was the real source of the reported network errors, not just something to retry around. Growth control and "current balance" upkeep moved server-side to a scheduled Apps Script cleanup instead of a live per-submission upsert. The form, trigger buttons, and API picker now survive being wiped by a site's own SPA re-render shortly after they're injected (reported on myprize.us: form flashes then disappears) — they re-attach themselves automatically unless closed on purpose. v1.68.0: re-merged the "🔗 Giveaway Link" button (PlayFame/HelloMillions/McLuck/SpinBlitz only, reuses the SC-tracker's own owner identity) that v1.67.0 had lost — v1.67.0 was pushed from the GitHub source (which never had this feature) and Tampermonkey's @updateURL auto-update silently overwrote the local copy that had it. No other changes from v1.67.0. v1.69.0: trigger buttons (Open Casino Form, API Picker, Giveaway Link, X) restacked vertically along the right edge of the screen with a smaller footprint; no other changes.
 // @author       Grok
 // @run-at       document-start
@@ -1607,12 +1607,12 @@
       position:'fixed', top:'50%', right:'0', transform:'translateY(-50%)', zIndex:'1000000', display:'flex', flexDirection:'column', gap:'4px'
     });
     const triggerButton = document.createElement('button');
-    triggerButton.textContent = 'Open Casino Form';
-    Object.assign(triggerButton.style, { padding:'6px 8px', fontSize:'12px', background:'#2196F3', color:'#fff', border:'none', borderRadius:'4px', cursor:'pointer' });
+    triggerButton.textContent = 'Form'; triggerButton.title = 'Open Casino Form';
+    Object.assign(triggerButton.style, { padding:'4px 6px', fontSize:'11px', background:'#2196F3', color:'#fff', border:'none', borderRadius:'4px', cursor:'pointer' });
     triggerButton.onclick = createForm;
     const apiPickerButton = document.createElement('button');
-    apiPickerButton.textContent = '📡 API Picker';
-    Object.assign(apiPickerButton.style, { padding:'6px 8px', fontSize:'12px', background:'#9c27b0', color:'#fff', border:'none', borderRadius:'4px', cursor:'pointer' });
+    apiPickerButton.textContent = '📡 API'; apiPickerButton.title = 'API Picker';
+    Object.assign(apiPickerButton.style, { padding:'4px 6px', fontSize:'11px', background:'#9c27b0', color:'#fff', border:'none', borderRadius:'4px', cursor:'pointer' });
     apiPickerButton.onclick = openAPIPickerModal;
     const closeXButton = document.createElement('button');
     closeXButton.textContent = 'X';
@@ -1623,8 +1623,8 @@
     const giveawaySite = GIVEAWAY_SITE_MAP[window.location.hostname];
     if (giveawaySite) {
       const giveawayButton = document.createElement('button');
-      giveawayButton.textContent = '🔗 Giveaway Link';
-      Object.assign(giveawayButton.style, { padding:'6px 8px', fontSize:'12px', background:'#4CAF50', color:'#fff', border:'none', borderRadius:'4px', cursor:'pointer' });
+      giveawayButton.textContent = '🔗 Link'; giveawayButton.title = 'Giveaway Link';
+      Object.assign(giveawayButton.style, { padding:'4px 6px', fontSize:'11px', background:'#4CAF50', color:'#fff', border:'none', borderRadius:'4px', cursor:'pointer' });
       giveawayButton.onclick = () => openGiveawayLinkModal(giveawaySite);
       buttonContainer.appendChild(giveawayButton);
     }
