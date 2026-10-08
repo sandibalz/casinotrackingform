@@ -1456,12 +1456,18 @@
     const container = document.createElement('div');
     const shadow = container.attachShadow({ mode: 'open' });
     Object.assign(container.style, {
-      position:'fixed', top:'50%', left:'50%', transform:'translate(-50%, -50%)',
-      zIndex:'1000000', maxWidth:'420px'
+      position:'fixed', top:'50%', right:'10px', transform:'translateY(-50%)',
+      zIndex:'1000000', width:'min(760px, calc(100vw - 20px))'
     });
 
     const style = document.createElement('style');
     style.textContent = `
+      form { display:flex; flex-wrap:wrap; gap:10px 12px; align-items:flex-end; }
+      .field { flex:1 1 170px; min-width:0; }
+      .field input, .field select { margin-bottom:0; }
+      .field label { margin-bottom:4px; }
+      .custom-selector-info, .picker-status { flex:1 1 100%; margin-bottom:0; min-height:0; }
+      .picker-button, .clear-custom-button, .submit-button, .close-button { flex:1 1 140px; width:auto; margin:0; }
       .form-container { all: initial; font: 14px/1.4 Arial, Helvetica, sans-serif;
         background:#fff; padding:20px; border:2px solid #000;
         border-radius:8px; box-shadow:0 4px 8px rgba(0,0,0,0.2); color:#000;
@@ -1491,7 +1497,8 @@
       const input = document.createElement('input');
       input.type = 'text'; input.value = value; input.readOnly = readOnly;
       if (placeholder) input.placeholder = placeholder;
-      form.appendChild(label); form.appendChild(input);
+      const field = document.createElement('div'); field.className = 'field';
+      field.appendChild(label); field.appendChild(input); form.appendChild(field);
       return input;
     };
 
@@ -1554,7 +1561,8 @@
     actionLabel.textContent = 'Purchase or Redeem:';
     const actionSelect = document.createElement('select');
     ['', 'Purchase', 'Redeem'].forEach(opt => actionSelect.add(new Option(opt || 'Choose', opt)));
-    form.appendChild(actionLabel); form.appendChild(actionSelect);
+    const actionField = document.createElement('div'); actionField.className = 'field';
+    actionField.appendChild(actionLabel); actionField.appendChild(actionSelect); form.appendChild(actionField);
 
     const amountInput = makeField('Amount:', '', false, 'Enter Amount');
     // Only default to 'Purchase' if nothing has been chosen yet — don't clobber an explicit 'Redeem' selection.
