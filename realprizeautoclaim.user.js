@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.9.3
+// @version      1.9.5
 // @description  On RealPrize and LoneStar Casino: clicks daily/grand prize COLLECT and any button whose text says collect / claim / free spins (incl. image-based Claim Now popups, CLAIM PRIZE, SPIN & WIN), and closes popups that show a price (e.g. 4.99, 19.99)
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -90,6 +90,8 @@
 //          text and got clicked, stopping/restarting the profile in an endless loop.
 // v1.9.2 – bare "Free Spins" buttons (e.g. LoneStar's top-right nav button) are no longer clicked
 //          on page load; free-spin-only labels are clicked only inside a popup/dialog layer.
+// v1.9.5 – Image-based popup search matches only claim/collect (it was clicking the nav "Free Spins" button).
+// v1.9.4 – free-claim detection matches any element with Claim Now text (not just buttons), and clicks it inside popups.
 // v1.9.3 – fixed header/nav no longer counts as a popup (nav Free Spins click); popups with a plain Claim/Collect button are not closed/skipped as price popups.
 (function () {
     'use strict';
@@ -100,6 +102,9 @@
     // v1.9.0: any short "collect" / "claim" / "free spin(s)" button counts
     // (previously only claim now / collect / claim bonus / claim reward).
     const CLAIM_TEXT_RE          = /\b(claim|collect|free\s*spins?)\b/i;
+    // v1.9.5: the popup-image walk must only match claim/collect, never "free spins" (it walks up to page-level
+    // ancestors and was clicking the top-nav Free Spins button instead of the popup's Claim Now).
+    const CLAIM_ONLY_RE          = /\b(claim|collect)\b/i;
     const GENERIC_TEXT_MAX_LEN   = 80;   // longer text = a paragraph/container, not a button
     const COUNTDOWN_RE           = /\b\d{1,2}:\d{2}\b|\b(in|available|unlocks?)\s+\d+\s*[dhm]\b/i;
     const MAX_CLICKS_PER_NODE    = 2;
@@ -222,8 +227,13 @@
     // v1.9.3: a popup with a plain Claim/Collect button is a free reward, never closed/skipped as a price popup
     function hasFreeClaimButton(pop) {
         if (!pop || !pop.querySelectorAll) return false;
-        return Array.from(pop.querySelectorAll('button, a, [role="button"], [class*="btn" i]')).some(b =>
-            isVisibleLoose(b) && /^(claim|collect)(\s+(now|reward|bonus|prize|free\s*spins?))?!?$/i.test(cleanText(b)));
+        return !!findFreeClaimEl(pop);
+    }
+    // v1.9.4: any visible element (button or not) whose text is just "Claim Now" / "Claim" / "Collect" ...
+    function findFreeClaimEl(pop) {
+        const re = /^(claim|collect)(\s+(now|reward|bonus|prize|free\s*spins?))?!?$/i;
+        const els = Array.from(pop.querySelectorAll('*')).filter(b => isVisibleLoose(b) && re.test(cleanText(b)));
+        return els.find(b => !els.some(o => o !== b && b.contains(o))) || null; // innermost match
     }
 
     const nodeClicks = new WeakMap();
@@ -536,6 +546,13 @@
             return true;
         });
 
+        // v1.9.4: "Claim Now" text that is not inside a button-like element, but is inside a popup
+        if (!visible.length) {
+            for (const pop of popupRoots()) {
+                const el = findFreeClaimEl(pop);
+                if (el && allowClick(el, false)) { visible.push(el); break; }
+            }
+        }
         return innermostOnly(visible);
     }
 
@@ -555,7 +572,7 @@
                 for (const btn of btns) {
                     if (!isVisibleLoose(btn)) continue;
                     if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') continue;
-                    if (CLAIM_TEXT_RE.test(cleanText(btn)) && allowClick(btn, false)) {
+                    if (CLAIM_ONLY_RE.test(cleanText(btn)) && allowClick(btn, false)) {
                         return btn;
                     }
                 }
@@ -568,7 +585,7 @@
                 // finding a real button. Anything that long isn't a Claim Now
                 // element — skip it instead of clicking it.
                 const parentText = cleanText(parent);
-                if (parentText.length < 200 && CLAIM_TEXT_RE.test(parentText) && isVisibleLoose(parent) && allowClick(parent, false)) {
+                if (parentText.length < 200 && CLAIM_ONLY_RE.test(parentText) && isVisibleLoose(parent) && allowClick(parent, false)) {
                     return parent;
                 }
 
@@ -587,7 +604,7 @@
                 // carousel/banner wrapper, whose class happens to contain "button").
                 // A real Claim Now element's text is short; anything long means we
                 // grabbed something far bigger than a button — skip it.
-                if (parentText.length < 200 && (CLAIM_TEXT_RE.test(parentText) || CLAIM_TEXT_RE.test(ariaLabel)) && allowClick(clickableParent, false)) {
+                if (parentText.length < 200 && (CLAIM_ONLY_RE.test(parentText) || CLAIM_ONLY_RE.test(ariaLabel)) && allowClick(clickableParent, false)) {
                     return clickableParent;
                 }
             }
@@ -755,5 +772,5 @@
     // ── Polling fallback ───────────────────────────────────────────────────────
     setInterval(scanAndClaim, POLL_INTERVAL_MS);
     armLaunchScan('page load');
-    log(`v1.9.4 loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), and launch buttons…`);
+    log(`v1.9.5 loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), and launch buttons…`);
 })();
