@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.10.1
+// @version      1.10.2
 // @description  On RealPrize and LoneStar Casino: clicks daily/grand prize COLLECT and any button whose text says collect / claim / free spins (incl. image-based Claim Now popups, CLAIM PRIZE, SPIN & WIN), and closes popups that show a price (e.g. 4.99, 19.99)
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -92,6 +92,7 @@
 //          text and got clicked, stopping/restarting the profile in an endless loop.
 // v1.9.2 – bare "Free Spins" buttons (e.g. LoneStar's top-right nav button) are no longer clicked
 //          on page load; free-spin-only labels are clicked only inside a popup/dialog layer.
+// v1.10.2 – SEEN log: records the text of every popup that appears (once per page load), even if the script does nothing with it.
 // v1.10.1 – fixed top/bottom bars and pointer-events:none layers no longer count as popups (nav Free Spins button was still clicked).
 // v1.10.0 – run log + overlay like Punt/Chanced: every click / popup close / site reply is stored per owner in Tampermonkey
 //           storage (claimLog_<owner>, last 300) and shown in a bottom-right overlay (Copy / x); menu commands "Show full claim log" and
@@ -751,7 +752,28 @@
         return null;
     }
 
+    // v1.10.2: record the text of every popup seen (once per distinct text per page load), even when nothing is clicked,
+    // so messages like "Social link has already been claimed" show up in the overlay/log.
+    const seenPopupTexts = new Set();
+    let lastSeenScanAt = 0;
+    function recordSeenPopups() {
+        if (now() - lastSeenScanAt < 1500) return;
+        lastSeenScanAt = now();
+        let roots = [];
+        try { roots = popupRoots(); } catch (_) { return; }
+        for (const root of roots) {
+            if (inCollectorUi(root)) continue;
+            const text = String(root.innerText || cleanText(root)).replace(/\s+/g, ' ').trim();
+            if (!text || text.length > 400) continue;     // long = page wrapper, not a message popup
+            const key = text.slice(0, 120);
+            if (seenPopupTexts.has(key)) continue;
+            seenPopupTexts.add(key);
+            record('SEEN', 'popup: ' + text.slice(0, 140));
+        }
+    }
+
     function scanAndClaim() {
+        recordSeenPopups();
         // v1.9.0: close price popups first (not subject to the claim cooldown)
         closePricePopups();
         if (onCooldown()) return;
@@ -896,5 +918,5 @@
     // ── Polling fallback ───────────────────────────────────────────────────────
     setInterval(scanAndClaim, POLL_INTERVAL_MS);
     armLaunchScan('page load');
-    log(`v1.10.1 loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), and launch buttons…`);
+    log(`v1.10.2 loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), and launch buttons…`);
 })();
