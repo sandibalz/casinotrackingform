@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.10.0
+// @version      1.10.1
 // @description  On RealPrize and LoneStar Casino: clicks daily/grand prize COLLECT and any button whose text says collect / claim / free spins (incl. image-based Claim Now popups, CLAIM PRIZE, SPIN & WIN), and closes popups that show a price (e.g. 4.99, 19.99)
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -92,6 +92,7 @@
 //          text and got clicked, stopping/restarting the profile in an endless loop.
 // v1.9.2 – bare "Free Spins" buttons (e.g. LoneStar's top-right nav button) are no longer clicked
 //          on page load; free-spin-only labels are clicked only inside a popup/dialog layer.
+// v1.10.1 – fixed top/bottom bars and pointer-events:none layers no longer count as popups (nav Free Spins button was still clicked).
 // v1.10.0 – run log + overlay like Punt/Chanced: every click / popup close / site reply is stored per owner in Tampermonkey
 //           storage (claimLog_<owner>, last 300) and shown in a bottom-right overlay (Copy / x); menu commands "Show full claim log" and
 //           "Change owner". @grant GM_*; removed `view: window` from synthetic clicks (throws in the sandbox). Launch-scan spam is console-only.
@@ -320,6 +321,17 @@
         return picked.filter(el => !picked.some(o => o !== el && o.contains(el)));
     }
 
+    // v1.10.1: fixed page chrome (LoneStar's top bar is a plain <div class="pointer-events-none fixed inset-x-0 top-0"> 1838x157,
+    // which passed the header/nav check) - a click-through layer, or a full-width strip hugging the top/bottom edge, is not a popup.
+    function isFixedBar(n) {
+        let cs, r;
+        try { cs = window.getComputedStyle(n); r = n.getBoundingClientRect(); } catch (_) { return false; }
+        if (cs.pointerEvents === 'none') return true;
+        const vw = window.innerWidth || 1, vh = window.innerHeight || 1;
+        const edge = r.top <= 2 || r.bottom >= vh - 2;
+        return r.width >= vw * 0.8 && r.height <= vh * 0.3 && edge;
+    }
+
     // Nearest popup layer around el (or null).
     function popupAround(el) {
         let n = el;
@@ -332,7 +344,7 @@
             try { pos = window.getComputedStyle(n).position; } catch (_) {}
             // v1.9.3: a fixed header/nav bar is not a popup (its Free Spins button was being clicked)
             if (pos === 'fixed' && n.getBoundingClientRect().width >= 150 && n.getBoundingClientRect().height >= 100 &&
-                !(n.matches && n.matches('header, nav, [role="navigation"]'))) return n;
+                !(n.matches && n.matches('header, nav, [role="navigation"]')) && !isFixedBar(n)) return n;
         }
         return null;
     }
@@ -884,5 +896,5 @@
     // ── Polling fallback ───────────────────────────────────────────────────────
     setInterval(scanAndClaim, POLL_INTERVAL_MS);
     armLaunchScan('page load');
-    log(`v1.10.0 loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), and launch buttons…`);
+    log(`v1.10.1 loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), and launch buttons…`);
 })();
