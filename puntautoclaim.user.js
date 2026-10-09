@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         Punt Auto Claim Promo Code
 // @namespace    https://punt.com/
-// @version      1.1.0
-// @description  When the Get Coins dialog's Promotion Codes tab is open with a code already filled in (e.g. from the autologin URL), clicks Submit once per code.
+// @version      1.2.0
+// @description  When the Get Coins dialog's Promotion Codes tab is open with a code already filled in (e.g. from the autologin URL), clicks Submit once per code. v1.2.0: logs each run (found / clicked / site response) per owner in Tampermonkey storage and shows a live log overlay.
 // @match        https://punt.com/*
 // @run-at       document-idle
-// @grant        none
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
 // @updateURL    https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/puntautoclaim.user.js
 // @downloadURL  https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/puntautoclaim.user.js
 // ==/UserScript==
@@ -21,6 +23,99 @@
 
     function log(msg) {
         console.log(`[Punt AutoClaim] ${msg}`);
+    }
+
+
+    // ---- v1.2.0: per-owner run log (stored in Tampermonkey) + live overlay ----
+    const SITE = 'Punt';
+    const RESULT_RE = /error|invalid|maximum|already|expired|not valid|reached|success|claimed|congrat|added|received|reward/i;
+    const ERROR_RE = /error|invalid|maximum|already|expired|not valid|reached|failed/i;
+    const runLog = [];          // this page run only, shown in the overlay
+    let overlayEl = null, overlayBody = null;
+
+    function getOwner(forcePrompt) {
+        let owner = GM_getValue('owner', '');
+        if (!owner || forcePrompt) {
+            const a = prompt('Who is this browser for? (Ben, Cindy, Tyler, Jessica)', owner || '');
+            if (a && a.trim()) { owner = a.trim(); GM_setValue('owner', owner); }
+        }
+        return owner || 'Unknown';
+    }
+
+    function record(event, detail) {
+        const entry = { t: new Date().toISOString(), site: SITE, event, detail: detail || '' };
+        runLog.push(entry);
+        const key = 'claimLog_' + getOwner();
+        let hist = GM_getValue(key, []);
+        hist.push(entry);
+        if (hist.length > 300) hist = hist.slice(-300);
+        GM_setValue(key, hist);
+        renderOverlay();
+    }
+
+    function fmt(e) {
+        return e.t.slice(11, 19) + ' ' + e.event + (e.detail ? ' - ' + e.detail : '');
+    }
+
+    function ensureOverlay() {
+        if (overlayEl || !document.body) return;
+        overlayEl = document.createElement('div');
+        overlayEl.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:2147483647;width:340px;max-height:220px;background:#111;color:#eee;font:12px/1.4 monospace;border:1px solid #555;border-radius:6px;box-shadow:0 2px 10px #000a;display:flex;flex-direction:column;';
+        const bar = document.createElement('div');
+        bar.style.cssText = 'display:flex;justify-content:space-between;padding:4px 8px;background:#222;border-radius:6px 6px 0 0;';
+        const title = document.createElement('span');
+        title.textContent = SITE + ' AutoClaim - ' + getOwner();
+        const btns = document.createElement('span');
+        const copy = document.createElement('button');
+        copy.textContent = 'Copy';
+        copy.style.cssText = 'margin-right:6px;cursor:pointer;';
+        copy.onclick = () => { try { navigator.clipboard.writeText(runLog.map(fmt).join('\n')); } catch (e) {} };
+        const close = document.createElement('button');
+        close.textContent = 'x';
+        close.style.cssText = 'cursor:pointer;';
+        close.onclick = () => { overlayEl.remove(); overlayEl = null; overlayBody = null; };
+        btns.append(copy, close);
+        bar.append(title, btns);
+        overlayBody = document.createElement('div');
+        overlayBody.style.cssText = 'padding:6px 8px;overflow:auto;white-space:pre-wrap;';
+        overlayEl.append(bar, overlayBody);
+        document.body.appendChild(overlayEl);
+    }
+
+    function renderOverlay() {
+        ensureOverlay();
+        if (overlayBody) {
+            overlayBody.textContent = runLog.map(fmt).join('\n');
+            overlayBody.scrollTop = overlayBody.scrollHeight;
+        }
+    }
+
+    function showHistory() {
+        const hist = GM_getValue('claimLog_' + getOwner(), []);
+        runLog.length = 0;
+        hist.slice(-40).forEach(e => runLog.push(e));
+        renderOverlay();
+    }
+
+    GM_registerMenuCommand('Show full claim log (' + SITE + ')', showHistory);
+    GM_registerMenuCommand('Change owner', () => { getOwner(true); });
+
+    // After clicking Submit, watch for the site's toast/message and record it.
+    function watchResult(code, before) {
+        let tries = 0;
+        const iv = setInterval(() => {
+            tries++;
+            const lines = (document.body ? document.body.innerText : '').split('\n').map(x => x.trim()).filter(Boolean);
+            const fresh = lines.filter(l => !before.has(l) && l.length < 200 && RESULT_RE.test(l));
+            if (fresh.length) {
+                clearInterval(iv);
+                const text = fresh.join(' | ');
+                record(ERROR_RE.test(text) ? 'RESULT-ERROR' : 'RESULT-SUCCESS', text);
+            } else if (tries >= 20) {
+                clearInterval(iv);
+                record('RESULT-NONE', 'no message seen within 8s of clicking Submit');
+            }
+        }, 400);
     }
 
     function isVisible(el) {
@@ -81,8 +176,14 @@
 
         submittedCodes.add(code);
         log(`submitting code "${code}"`);
+        record('dialog-found', 'code ' + code);
+        const before = new Set((document.body ? document.body.innerText : '').split('\n').map(x => x.trim()).filter(Boolean));
         robustClick(submitBtn);
+        record('submit-clicked', 'code ' + code);
+        watchResult(code, before);
     }
+
+    record('script-loaded', location.pathname);
 
     // Initial pass.
     scan();
