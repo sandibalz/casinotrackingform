@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.9.3
+// @version      1.9.4
 // @description  On RealPrize and LoneStar Casino: clicks daily/grand prize COLLECT and any button whose text says collect / claim / free spins (incl. image-based Claim Now popups, CLAIM PRIZE, SPIN & WIN), and closes popups that show a price (e.g. 4.99, 19.99)
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -90,6 +90,7 @@
 //          text and got clicked, stopping/restarting the profile in an endless loop.
 // v1.9.2 – bare "Free Spins" buttons (e.g. LoneStar's top-right nav button) are no longer clicked
 //          on page load; free-spin-only labels are clicked only inside a popup/dialog layer.
+// v1.9.4 – free-claim detection matches any element with Claim Now text (not just buttons), and clicks it inside popups.
 // v1.9.3 – fixed header/nav no longer counts as a popup (nav Free Spins click); popups with a plain Claim/Collect button are not closed/skipped as price popups.
 (function () {
     'use strict';
@@ -222,8 +223,13 @@
     // v1.9.3: a popup with a plain Claim/Collect button is a free reward, never closed/skipped as a price popup
     function hasFreeClaimButton(pop) {
         if (!pop || !pop.querySelectorAll) return false;
-        return Array.from(pop.querySelectorAll('button, a, [role="button"], [class*="btn" i]')).some(b =>
-            isVisibleLoose(b) && /^(claim|collect)(\s+(now|reward|bonus|prize|free\s*spins?))?!?$/i.test(cleanText(b)));
+        return !!findFreeClaimEl(pop);
+    }
+    // v1.9.4: any visible element (button or not) whose text is just "Claim Now" / "Claim" / "Collect" ...
+    function findFreeClaimEl(pop) {
+        const re = /^(claim|collect)(\s+(now|reward|bonus|prize|free\s*spins?))?!?$/i;
+        const els = Array.from(pop.querySelectorAll('*')).filter(b => isVisibleLoose(b) && re.test(cleanText(b)));
+        return els.find(b => !els.some(o => o !== b && b.contains(o))) || null; // innermost match
     }
 
     const nodeClicks = new WeakMap();
@@ -536,6 +542,13 @@
             return true;
         });
 
+        // v1.9.4: "Claim Now" text that is not inside a button-like element, but is inside a popup
+        if (!visible.length) {
+            for (const pop of popupRoots()) {
+                const el = findFreeClaimEl(pop);
+                if (el && allowClick(el, false)) { visible.push(el); break; }
+            }
+        }
         return innermostOnly(visible);
     }
 
