@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.9.2
+// @version      1.9.3
 // @description  On RealPrize and LoneStar Casino: clicks daily/grand prize COLLECT and any button whose text says collect / claim / free spins (incl. image-based Claim Now popups, CLAIM PRIZE, SPIN & WIN), and closes popups that show a price (e.g. 4.99, 19.99)
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -90,6 +90,7 @@
 //          text and got clicked, stopping/restarting the profile in an endless loop.
 // v1.9.2 – bare "Free Spins" buttons (e.g. LoneStar's top-right nav button) are no longer clicked
 //          on page load; free-spin-only labels are clicked only inside a popup/dialog layer.
+// v1.9.3 – fixed header/nav no longer counts as a popup (nav Free Spins click); popups with a plain Claim/Collect button are not closed/skipped as price popups.
 (function () {
     'use strict';
 
@@ -211,9 +212,18 @@
         for (let i = 0; i < 14 && n && n !== document.body; i++, n = n.parentElement) {
             let pos = '';
             try { pos = window.getComputedStyle(n).position; } catch (_) {}
-            if (pos === 'fixed' && n.getBoundingClientRect().width >= 150) return n;
+            // v1.9.3: a fixed header/nav bar is not a popup (its Free Spins button was being clicked)
+            if (pos === 'fixed' && n.getBoundingClientRect().width >= 150 && n.getBoundingClientRect().height >= 100 &&
+                !(n.matches && n.matches('header, nav, [role="navigation"]'))) return n;
         }
         return null;
+    }
+
+    // v1.9.3: a popup with a plain Claim/Collect button is a free reward, never closed/skipped as a price popup
+    function hasFreeClaimButton(pop) {
+        if (!pop || !pop.querySelectorAll) return false;
+        return Array.from(pop.querySelectorAll('button, a, [role="button"], [class*="btn" i]')).some(b =>
+            isVisibleLoose(b) && /^(claim|collect)(\s+(now|reward|bonus|prize|free\s*spins?))?!?$/i.test(cleanText(b)));
     }
 
     const nodeClicks = new WeakMap();
@@ -260,7 +270,7 @@
         }
         if (SKIP_CLAIM_IN_PRICE_POPUPS) {
             const pop = popupAround(el);
-            if (pop && !pop.matches(PROTECTED_POPUP_SEL) && hasPrice(cleanText(pop))) return false;
+            if (pop && !pop.matches(PROTECTED_POPUP_SEL) && !hasFreeClaimButton(pop) && hasPrice(cleanText(pop))) return false;
         }
         return true;
     }
@@ -325,7 +335,7 @@
         for (const root of popupRoots()) {
             if (root.matches(PROTECTED_POPUP_SEL) || root.querySelector(PROTECTED_POPUP_SEL)) continue;
             const text = cleanText(root);
-            if (!hasPrice(text)) continue;
+            if (!hasPrice(text) || hasFreeClaimButton(root)) continue;
             // Register every price popup the first time it is seen (even if only one is closed per pass),
             // so "opened by you" is judged against when it APPEARED, not when it got its turn.
             if (!popupState.has(root)) {
