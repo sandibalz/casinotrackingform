@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.9.0
+// @version      1.9.1
 // @description  On RealPrize and LoneStar Casino: clicks daily/grand prize COLLECT and any button whose text says collect / claim / free spins (incl. image-based Claim Now popups, CLAIM PRIZE, SPIN & WIN), and closes popups that show a price (e.g. 4.99, 19.99)
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -84,6 +84,10 @@
 //            themselves (trusted click shortly before) are left alone
 //          * claim buttons inside a popup that shows a price are NOT clicked
 //            (could be a purchase button) - SKIP_CLAIM_IN_PRICE_POPUPS
+// v1.9.1 – never click anything that belongs to the Collector-App extension's on-page UI
+//          (#collector-app-overlay-root Run/Stop buttons, debug log, log panel). The
+//          "Lonestar/RealPrize Free Spins" profile buttons matched the new "free spin(s)"
+//          text and got clicked, stopping/restarting the profile in an endless loop.
 (function () {
     'use strict';
 
@@ -221,8 +225,21 @@
         textClicks.set(key, (textClicks.get(key) || 0) + 1);
     }
     // generic = broad text match (strict guards); false = specific popup paths (only the price/loop guards)
+    // v1.9.1: elements that belong to the Collector-App extension UI must never be clicked
+    const COLLECTOR_UI_SEL = '#collector-app-overlay-root, #collector-app-debug-log, #__collector_log_panel';
+    function inCollectorUi(el) {
+        let n = el;
+        for (let i = 0; i < 12 && n; i++) {
+            if (n.nodeType === 1 && n.matches && n.matches(COLLECTOR_UI_SEL)) return true;
+            if (n.nodeType === 1 && n.closest && n.closest(COLLECTOR_UI_SEL)) return true;
+            const root = n.getRootNode && n.getRootNode();
+            n = root && root.host ? root.host : null; // climb out of shadow roots
+        }
+        return false;
+    }
+
     function allowClick(el, generic) {
-        if (!el) return false;
+        if (!el || inCollectorUi(el)) return false;
         if ((nodeClicks.get(el) || 0) >= MAX_CLICKS_PER_NODE) return false;
         const label = labelOf(el);
         if ((textClicks.get(label.toLowerCase()) || 0) >= MAX_CLICKS_PER_TEXT) return false;
@@ -633,7 +650,7 @@
         let clicked = 0;
         for (const btn of btns) {
             const text = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-            if (!text) continue;
+            if (!text || inCollectorUi(btn)) continue;
 
             const match = LAUNCH_BUTTON_MATCHERS.find(m => m.re.test(text));
             if (!match) continue;
