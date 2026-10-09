@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Punt Auto Claim Promo Code
 // @namespace    https://punt.com/
-// @version      1.2.0
+// @version      1.2.1
 // @description  When the Get Coins dialog's Promotion Codes tab is open with a code already filled in (e.g. from the autologin URL), clicks Submit once per code. v1.2.0: logs each run (found / clicked / site response) per owner in Tampermonkey storage and shows a live log overlay.
 // @match        https://punt.com/*
 // @run-at       document-idle
@@ -131,7 +131,7 @@
         const rect = el.getBoundingClientRect();
         const x = rect.left + rect.width / 2;
         const y = rect.top + rect.height / 2;
-        const base = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0, buttons: 1, detail: 1 };
+        const base = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: 1, detail: 1 };
         el.dispatchEvent(new PointerEvent('pointerdown', { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
         el.dispatchEvent(new MouseEvent('mousedown', base));
         el.dispatchEvent(new PointerEvent('pointerup', { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
@@ -178,7 +178,7 @@
         log(`submitting code "${code}"`);
         record('dialog-found', 'code ' + code);
         const before = new Set((document.body ? document.body.innerText : '').split('\n').map(x => x.trim()).filter(Boolean));
-        robustClick(submitBtn);
+        try { robustClick(submitBtn); } catch (err) { record('click-ERROR', String(err)); return; }
         record('submit-clicked', 'code ' + code);
         watchResult(code, before);
     }
