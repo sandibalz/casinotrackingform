@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.9.5
+// @version      1.10.0
 // @description  On RealPrize and LoneStar Casino: clicks daily/grand prize COLLECT and any button whose text says collect / claim / free spins (incl. image-based Claim Now popups, CLAIM PRIZE, SPIN & WIN), and closes popups that show a price (e.g. 4.99, 19.99)
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
 // @match        *://*.lonestarcasino.com/*
-// @grant        none
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
 // @run-at       document-idle
 // @updateURL    https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/realprizeautoclaim.user.js
 // @downloadURL  https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/realprizeautoclaim.user.js
@@ -90,6 +92,9 @@
 //          text and got clicked, stopping/restarting the profile in an endless loop.
 // v1.9.2 – bare "Free Spins" buttons (e.g. LoneStar's top-right nav button) are no longer clicked
 //          on page load; free-spin-only labels are clicked only inside a popup/dialog layer.
+// v1.10.0 – run log + overlay like Punt/Chanced: every click / popup close / site reply is stored per owner in Tampermonkey
+//           storage (claimLog_<owner>, last 300) and shown in a bottom-right overlay (Copy / x); menu commands "Show full claim log" and
+//           "Change owner". @grant GM_*; removed `view: window` from synthetic clicks (throws in the sandbox). Launch-scan spam is console-only.
 // v1.9.5 – Image-based popup search matches only claim/collect (it was clicking the nav "Free Spins" button).
 // v1.9.4 – free-claim detection matches any element with Claim Now text (not just buttons), and clicks it inside popups.
 // v1.9.3 – fixed header/nav no longer counts as a popup (nav Free Spins click); popups with a plain Claim/Collect button are not closed/skipped as price popups.
@@ -143,8 +148,116 @@
     const clickedLaunchButtons = new WeakSet(); // avoid re-clicking the same node
 
     // ── Helpers ────────────────────────────────────────────────────────────────
+    // ── v1.10.0: per-owner run log (Tampermonkey storage) + live overlay (same idea as Punt/Chanced) ──
+    const IS_TOP     = window.top === window.self;
+    const SITE       = /lonestar/i.test(location.hostname) ? 'LoneStar' : 'RealPrize';
+    const RESULT_RE  = /error|invalid|already|expired|not valid|failed|success|claimed|congrat|added|received|reward|collected/i;
+    const ERROR_RE   = /error|invalid|already|expired|not valid|failed/i;
+    const NOISY_LOG_RE = /^(Launch scan:|Launch-window button scan)/;   // console only, not stored
+    const runLog = [];            // this page run only, shown in the overlay
+    let overlayEl = null, overlayBody = null;
+
+    function getOwner(forcePrompt) {
+        let owner = '';
+        try { owner = GM_getValue('owner', ''); } catch (_) {}
+        if ((!owner || forcePrompt) && IS_TOP) {
+            const a = prompt('Who is this browser for? (Ben, Cindy, Tyler, Jessica)', owner || '');
+            if (a && a.trim()) { owner = a.trim(); try { GM_setValue('owner', owner); } catch (_) {} }
+        }
+        return owner || 'Unknown';
+    }
+    function fmtEntry(e) {
+        return e.t.slice(11, 19) + ' ' + e.event + (e.detail ? ' - ' + e.detail : '');
+    }
+    function record(event, detail) {
+        try {
+            const entry = { t: new Date().toISOString(), site: SITE, event, detail: String(detail || '').slice(0, 300) };
+            runLog.push(entry);
+            if (runLog.length > 200) runLog.shift();
+            const key = 'claimLog_' + getOwner();
+            let hist = GM_getValue(key, []);
+            hist.push(entry);
+            if (hist.length > 300) hist = hist.slice(-300);
+            GM_setValue(key, hist);
+            renderOverlay();
+        } catch (_) {}
+    }
+    function ensureOverlay() {
+        if (!IS_TOP || overlayEl || !document.body) return;
+        overlayEl = document.createElement('div');
+        overlayEl.id = 'realprize-autoclaim-overlay';
+        overlayEl.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:2147483647;width:340px;max-height:220px;background:#111;color:#eee;font:12px/1.4 monospace;border:1px solid #555;border-radius:6px;box-shadow:0 2px 10px #000a;display:flex;flex-direction:column;';
+        const bar = document.createElement('div');
+        bar.style.cssText = 'display:flex;justify-content:space-between;padding:4px 8px;background:#222;border-radius:6px 6px 0 0;';
+        const title = document.createElement('span');
+        title.textContent = SITE + ' AutoClaim - ' + getOwner();
+        const btns = document.createElement('span');
+        const copy = document.createElement('button');
+        copy.textContent = 'Copy';
+        copy.style.cssText = 'margin-right:6px;cursor:pointer;';
+        copy.onclick = () => { try { navigator.clipboard.writeText(runLog.map(fmtEntry).join('\n')); } catch (e) {} };
+        const close = document.createElement('button');
+        close.textContent = 'x';
+        close.style.cssText = 'cursor:pointer;';
+        close.onclick = () => { overlayEl.remove(); overlayEl = null; overlayBody = null; };
+        btns.append(copy, close);
+        bar.append(title, btns);
+        overlayBody = document.createElement('div');
+        overlayBody.style.cssText = 'padding:6px 8px;overflow:auto;white-space:pre-wrap;';
+        overlayEl.append(bar, overlayBody);
+        document.body.appendChild(overlayEl);
+    }
+    function renderOverlay() {
+        ensureOverlay();
+        if (overlayBody) {
+            overlayBody.textContent = runLog.map(fmtEntry).join('\n');
+            overlayBody.scrollTop = overlayBody.scrollHeight;
+        }
+    }
+    function showHistory() {
+        let hist = [];
+        try { hist = GM_getValue('claimLog_' + getOwner(), []); } catch (_) {}
+        runLog.length = 0;
+        hist.slice(-40).forEach(e => runLog.push(e));
+        renderOverlay();
+    }
+    try {
+        GM_registerMenuCommand('Show full claim log (' + SITE + ')', showHistory);
+        GM_registerMenuCommand('Change owner', () => { getOwner(true); });
+    } catch (_) {}
+
+    // Page text excluding our own overlay (so the overlay's words never count as a site message).
+    function pageLines() {
+        if (!document.body) return [];
+        return Array.from(document.body.children).filter(c => c !== overlayEl)
+            .map(c => c.innerText || '').join('\n').split('\n').map(x => x.trim()).filter(Boolean);
+    }
+    // After a claim click, record the site's reply (toast / popup text) if one shows up.
+    let resultWatchUntil = 0;
+    function watchResult(before) {
+        if (now() < resultWatchUntil) return;           // one watcher at a time
+        resultWatchUntil = now() + 7000;
+        let tries = 0;
+        const iv = setInterval(() => {
+            tries++;
+            const fresh = pageLines().filter(l => !before.has(l) && l.length < 120 && RESULT_RE.test(l));
+            if (fresh.length) {
+                clearInterval(iv); resultWatchUntil = 0;
+                const text = fresh.slice(0, 3).join(' | ');
+                record(ERROR_RE.test(text) ? 'RESULT-ERROR' : 'RESULT-SUCCESS', text);
+            } else if (tries >= 16) {
+                clearInterval(iv); resultWatchUntil = 0;
+                record('RESULT-NONE', 'no message seen within 6s of the click');
+            }
+        }, 400);
+    }
+
     function log(msg) {
         console.log(`[AutoClaim] ${msg}`);
+        if (NOISY_LOG_RE.test(msg)) return;
+        const isClick = /clicking/.test(msg);
+        record(isClick ? 'CLICK' : (/price popup/i.test(msg) ? 'POPUP' : 'info'), msg);
+        if (isClick) watchResult(new Set(pageLines()));
     }
     function now() {
         return Date.now();
@@ -248,7 +361,7 @@
     }
     // generic = broad text match (strict guards); false = specific popup paths (only the price/loop guards)
     // v1.9.1: elements that belong to the Collector-App extension UI must never be clicked
-    const COLLECTOR_UI_SEL = '#collector-app-overlay-root, #collector-app-debug-log, #__collector_log_panel';
+    const COLLECTOR_UI_SEL = '#realprize-autoclaim-overlay, #collector-app-overlay-root, #collector-app-debug-log, #__collector_log_panel';
     function inCollectorUi(el) {
         let n = el;
         for (let i = 0; i < 12 && n; i++) {
@@ -383,7 +496,6 @@
         const base = {
             bubbles: true,
             cancelable: true,
-            view: window,
             clientX: x,
             clientY: y,
             screenX: x + (window.screenX || 0),
@@ -772,5 +884,5 @@
     // ── Polling fallback ───────────────────────────────────────────────────────
     setInterval(scanAndClaim, POLL_INTERVAL_MS);
     armLaunchScan('page load');
-    log(`v1.9.5 loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), and launch buttons…`);
+    log(`v1.10.0 loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), and launch buttons…`);
 })();
