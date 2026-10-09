@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.9.1
+// @version      1.9.2
 // @description  On RealPrize and LoneStar Casino: clicks daily/grand prize COLLECT and any button whose text says collect / claim / free spins (incl. image-based Claim Now popups, CLAIM PRIZE, SPIN & WIN), and closes popups that show a price (e.g. 4.99, 19.99)
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -88,6 +88,8 @@
 //          (#collector-app-overlay-root Run/Stop buttons, debug log, log panel). The
 //          "Lonestar/RealPrize Free Spins" profile buttons matched the new "free spin(s)"
 //          text and got clicked, stopping/restarting the profile in an endless loop.
+// v1.9.2 – bare "Free Spins" buttons (e.g. LoneStar's top-right nav button) are no longer clicked
+//          on page load; free-spin-only labels are clicked only inside a popup/dialog layer.
 (function () {
     'use strict';
 
@@ -518,7 +520,10 @@
         const visible = candidates.filter(el => {
             if (!isVisibleLoose(el)) return false;
             if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
-            return CLAIM_TEXT_RE.test(labelOf(el)) && allowClick(el, true);
+            if (!CLAIM_TEXT_RE.test(labelOf(el)) || !allowClick(el, true)) return false;
+            // v1.9.2: a bare "Free Spins" label (e.g. the top-right nav button) is only clicked inside a popup
+            if (!/\b(claim|collect)\b/i.test(labelOf(el)) && !popupAround(el)) return false;
+            return true;
         });
 
         return innermostOnly(visible);
