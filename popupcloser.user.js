@@ -28,6 +28,7 @@
     {"host":"playfame.com","name":"Add this web app to your devic","text":"Add this web app to your device","close":"[data-testid=\"button-base\"]"},
     {"host":"playfame.com","name":"Daily Offer","text":"Daily Offer","close":"[data-testid=\"button-base\"]"},
     {"host":"hellomillions.com","name":"Daily Offer","text":"Daily Offer","close":"[data-testid=\"close-modal-button\"]"},
+    {"host":"hellomillions.com","name":"JACKPOTS are available","text":"JACKPOTS are available","close":"[data-testid=\"close-modal-button\"]"},
   ];
 
   const LOG = '[PopupCloser]';
