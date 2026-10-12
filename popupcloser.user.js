@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Popup Closer (per-site list)
 // @namespace    https://github.com/sandibalz/casinotrackingform
-// @version      1.5.1
+// @version      1.6.0
 // @description  Closes pop-ups you teach it (e.g. the "Add this web app to your device" bar) on the sites you add. Does nothing on a site that has no rule. Add rules from the Tampermonkey menu.
 // @match        *://*/*
 // @noframes
@@ -30,8 +30,10 @@
     { host: 'hellomillions.com', name: 'Daily Offer', text: 'Daily Offer', close: '[data-testid="close-modal-button"]' },
     { host: 'hellomillions.com', name: 'JACKPOTS are available', text: 'JACKPOTS are available', close: '[data-testid="close-modal-button"]' },
     { host: 'spinblitz.com', name: 'Daily Offer', text: 'Daily Offer', close: '' },
-    {"host":"spinblitz.com","name":"Free benefits on all packages","text":"Free benefits on all packages","close":"[aria-label=\"Button\"]"},
-    {"host":"spinblitz.com","name":"Add this web app to your devic","text":"Add this web app to your device","close":"[data-testid=\"button-base\"]"},
+    { host: 'spinblitz.com', name: 'Free benefits on all packages', text: 'Free benefits on all packages', close: '[aria-label="Button"]' },
+    { host: 'spinblitz.com', name: 'Add this web app to your devic', text: 'Add this web app to your device', close: '[data-testid="button-base"]' },
+    { host: 'mcluck.com', name: 'Daily Offer', text: 'Daily Offer', close: '[data-testid="close-modal-button"]' },
+    { host: 'mcluck.com', name: 'Jackpot opt-in', text: 'JACKPOT is available', close: '[data-testid="close-modal-button"]' },
   ];
 
   const LOG = '[PopupCloser]';
@@ -52,10 +54,16 @@
     const r = el.getBoundingClientRect(); const cs = getComputedStyle(el);
     return r.width > 8 && r.height > 8 && cs.display !== 'none' && cs.visibility !== 'hidden' && cs.opacity !== '0' && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
   };
+  // true only if the element is really the thing under its own center point (not covered by another modal stacked on top)
+  const onTop = (b) => {
+    const r = b.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return false;
+    const t = document.elementFromPoint(x, y); return !!t && (t === b || b.contains(t));
+  };
   const isPositioned = (el) => { const p = getComputedStyle(el).position; return p === 'fixed' || p === 'absolute' || p === 'sticky' || el.getAttribute('role') === 'dialog' || el.tagName === 'DIALOG'; };
 
   function autoCloseButton(pop) {
-    const cands = [...pop.querySelectorAll('button, [role="button"], a, [aria-label], [class*="close" i], [class*="dismiss" i]')].filter(visible);
+    const cands = [...pop.querySelectorAll('button, [role="button"], a, [aria-label], [class*="close" i], [class*="dismiss" i]')].filter((b) => visible(b) && onTop(b));
     let best = null, bestScore = 0;
     const iconOnly = cands.filter((b) => !(b.textContent || '').trim() && (b.querySelector('svg, img') || b.tagName === 'BUTTON') && b.getBoundingClientRect().width <= 64);
     for (const b of cands) {
@@ -99,7 +107,7 @@
     for (const f of found) {
       let btn = null;
       if (rule.close) { // 1.4.0: skip matches that are action buttons (generic selectors like [data-testid="button-base"] also hit Buy/Get buttons)
-        try { btn = [...f.el.querySelectorAll(rule.close)].find((b) => visible(b) && !ACTION_TXT.test((b.textContent || '').trim())) || null; } catch (e) {}
+        try { btn = [...f.el.querySelectorAll(rule.close)].find((b) => visible(b) && onTop(b) && !ACTION_TXT.test((b.textContent || '').trim())) || null; } catch (e) {}
       }
       if (!btn) btn = autoCloseButton(f.el);
       if (btn) return { popup: f.el, btn };
