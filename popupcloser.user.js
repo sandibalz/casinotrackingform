@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Popup Closer (per-site list)
 // @namespace    https://github.com/sandibalz/casinotrackingform
-// @version      1.1.0
+// @version      1.2.0
 // @description  Closes pop-ups you teach it (e.g. the "Add this web app to your device" bar) on the sites you add. Does nothing on a site that has no rule. Add rules from the Tampermonkey menu.
 // @match        *://*/*
 // @noframes
@@ -9,12 +9,17 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
+// @grant        GM_setClipboard
+// @updateURL    https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/popupcloser.user.js
+// @downloadURL  https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/popupcloser.user.js
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  // ---- Built-in rules (edit freely, or use the Tampermonkey menu to add more) ----
+  // ---- Built-in rules (shared: these come with the GitHub copy, so every owner gets them) ----
+  // Rules added from the Tampermonkey menu are saved only in THAT browser. To share one with everyone, use the menu item
+  // "Copy my rules (to share via GitHub)", paste the lines into DEFAULT_RULES below, bump @version, and push to GitHub.
   // host: hostname without "www." (also matches its subdomains)
   // text: regex (case-insensitive) that must appear in the popup's own text
   // close: optional CSS selector for the close button INSIDE the popup; leave '' to auto-find an X / Close button
@@ -165,11 +170,20 @@
     const i = parseInt(n, 10) - 1; if (i >= 0 && i < all.length) { all.splice(i, 1); sv(KEY, all); alert('Deleted. Reload the page.'); }
   }
 
+  function copyRules() {
+    const all = userRules();
+    if (!all.length) { alert('You have no menu-added rules to copy.'); return; }
+    const txt = all.map((r) => '    ' + JSON.stringify({ host: r.host, name: r.name, text: r.text.replace(/\\(.)/g, '$1'), close: r.close || '' }) + ',').join('\n');
+    try { GM_setClipboard(txt); alert('Copied ' + all.length + ' rule line(s). Paste them inside DEFAULT_RULES in the script file, bump @version, push to GitHub. (Then delete them from your own list so they are not doubled.)'); }
+    catch (e) { prompt('Copy these lines into DEFAULT_RULES:', txt); }
+  }
+
   try {
     GM_registerMenuCommand('➕ Add popup (click its X)', () => pickMode('x'));
     GM_registerMenuCommand('➕ Add popup (click its text)', () => pickMode('text'));
     GM_registerMenuCommand('➕ Add popup by typing…', addByTyping);
     GM_registerMenuCommand('📋 Show / delete my rules', manage);
+    GM_registerMenuCommand('📤 Copy my rules (to share via GitHub)', copyRules);
     GM_registerMenuCommand('▶ Run closer now (this page)', () => { sweep(); const r = rulesHere(); toast(r.length ? 'Ran ' + r.length + ' rule(s)' : 'No rules for ' + host); });
   } catch (e) {}
 })();
