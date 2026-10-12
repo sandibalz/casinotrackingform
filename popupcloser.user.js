@@ -26,6 +26,7 @@
   const DEFAULT_RULES = [
     { host: 'megabonanza.com', name: 'Add web app to home', text: 'Add this web app to your device', close: '' },
     {"host":"playfame.com","name":"Add this web app to your devic","text":"Add this web app to your device","close":"[data-testid=\"button-base\"]"},
+    {"host":"playfame.com","name":"Daily Offer","text":"Daily Offer","close":"[data-testid=\"button-base\"]"},
   ];
 
   const LOG = '[PopupCloser]';
