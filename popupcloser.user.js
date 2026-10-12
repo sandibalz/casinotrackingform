@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Popup Closer (per-site list)
 // @namespace    https://github.com/sandibalz/casinotrackingform
-// @version      1.0.0
+// @version      1.1.0
 // @description  Closes pop-ups you teach it (e.g. the "Add this web app to your device" bar) on the sites you add. Does nothing on a site that has no rule. Add rules from the Tampermonkey menu.
 // @match        *://*/*
 // @noframes
@@ -119,28 +119,40 @@
     return '';
   }
 
-  function pickMode() {
+  // best phrase to match on: the longest text line in the popup that is not a button label
+  function bestPhrase(pop) {
+    const btnTxt = new Set([...pop.querySelectorAll('button,[role="button"],a')].map((b) => (b.textContent || '').trim()));
+    const lines = (pop.innerText || '').split(/\n+/).map((l) => l.replace(/\s+/g, ' ').trim()).filter((l) => l.length >= 8 && !btnTxt.has(l));
+    lines.sort((x, y) => y.length - x.length);
+    return (lines[0] || (pop.innerText || '').replace(/\s+/g, ' ').trim()).slice(0, 90);
+  }
+  const popupOf = (el) => { let p = el.nodeType === 1 ? el : el.parentElement; while (p && p !== document.body && !isPositioned(p)) p = p.parentElement; return p && p !== document.body ? p : null; };
+
+  // mode 'x': you click the popup's close button; mode 'text': you click the popup's text.
+  // Either way the phrase is captured from the page and shown prefilled (Enter to accept, or edit it).
+  function pickMode(mode) {
     const bar = document.createElement('div'); bar.id = 'popupcloser-pick';
     bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#c2185b;color:#fff;font:14px sans-serif;padding:8px;text-align:center';
-    bar.textContent = 'Popup Closer: click the popup\'s X / close button (Esc to cancel)';
+    bar.textContent = mode === 'x' ? "Popup Closer: click the popup's X / close button (Esc to cancel)" : "Popup Closer: click the popup's text (Esc to cancel)";
     document.documentElement.appendChild(bar);
     const done = () => { bar.remove(); document.removeEventListener('click', onClick, true); document.removeEventListener('keydown', onKey, true); };
     const onKey = (e) => { if (e.key === 'Escape') done(); };
     const onClick = (e) => {
       if (bar.contains(e.target)) return;
       e.preventDefault(); e.stopPropagation(); done();
-      const btn = e.target.closest('button,[role="button"],a') || e.target;
-      let pop = btn.parentElement; while (pop && pop !== document.body && !isPositioned(pop)) pop = pop.parentElement;
-      if (!pop || pop === document.body) { alert('Could not tell which popup that belongs to. Use "Add popup by text" instead.'); return; }
-      const sample = (pop.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 70);
-      const phrase = prompt('Type a phrase that is always in this popup (taken from its text; edit if needed):', sample);
-      if (!phrase) return;
-      addRule({ host, name: phrase.slice(0, 30), text: esc(phrase.trim()), close: stableSelector(btn) });
+      const pop = popupOf(e.target);
+      if (!pop) { alert('Could not tell which popup that belongs to. Try again, or use "Add popup by typing".'); return; }
+      let phrase = bestPhrase(pop), close = '';
+      if (mode === 'x') { const btn = e.target.closest('button,[role="button"],a') || e.target; close = stableSelector(btn); }
+      else { const t = (e.target.innerText || e.target.textContent || '').replace(/\s+/g, ' ').trim(); if (t.length >= 8 && t.length <= 120) phrase = t; }
+      const ok = prompt('Phrase that is always in this popup (captured from the page - Enter to accept, or edit):', phrase);
+      if (!ok) return;
+      addRule({ host, name: ok.slice(0, 30), text: esc(ok.trim()), close });
     };
     document.addEventListener('click', onClick, true); document.addEventListener('keydown', onKey, true);
   }
 
-  function addByText() {
+  function addByTyping() {
     const h = prompt('Site (hostname, no www):', host); if (!h) return;
     const phrase = prompt('A phrase that is always in the popup:'); if (!phrase) return;
     addRule({ host: h.trim().replace(/^www\./, ''), name: phrase.slice(0, 30), text: esc(phrase.trim()), close: '' });
@@ -154,8 +166,9 @@
   }
 
   try {
-    GM_registerMenuCommand('➕ Add popup (click its X)', pickMode);
-    GM_registerMenuCommand('➕ Add popup by text…', addByText);
+    GM_registerMenuCommand('➕ Add popup (click its X)', () => pickMode('x'));
+    GM_registerMenuCommand('➕ Add popup (click its text)', () => pickMode('text'));
+    GM_registerMenuCommand('➕ Add popup by typing…', addByTyping);
     GM_registerMenuCommand('📋 Show / delete my rules', manage);
     GM_registerMenuCommand('▶ Run closer now (this page)', () => { sweep(); const r = rulesHere(); toast(r.length ? 'Ran ' + r.length + ' rule(s)' : 'No rules for ' + host); });
   } catch (e) {}
