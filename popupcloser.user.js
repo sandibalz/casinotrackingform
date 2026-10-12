@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Popup Closer (per-site list)
 // @namespace    https://github.com/sandibalz/casinotrackingform
-// @version      1.4.1
+// @version      1.5.0
 // @description  Closes pop-ups you teach it (e.g. the "Add this web app to your device" bar) on the sites you add. Does nothing on a site that has no rule. Add rules from the Tampermonkey menu.
 // @match        *://*/*
 // @noframes
@@ -25,10 +25,11 @@
   // close: optional CSS selector for the close button INSIDE the popup; leave '' to auto-find an X / Close button
   const DEFAULT_RULES = [
     { host: 'megabonanza.com', name: 'Add web app to home', text: 'Add this web app to your device', close: '' },
-    {"host":"playfame.com","name":"Add this web app to your devic","text":"Add this web app to your device","close":"[data-testid=\"button-base\"]"},
-    {"host":"playfame.com","name":"Daily Offer","text":"Daily Offer","close":"[data-testid=\"button-base\"]"},
-    {"host":"hellomillions.com","name":"Daily Offer","text":"Daily Offer","close":"[data-testid=\"close-modal-button\"]"},
-    {"host":"hellomillions.com","name":"JACKPOTS are available","text":"JACKPOTS are available","close":"[data-testid=\"close-modal-button\"]"},
+    { host: 'playfame.com', name: 'Add this web app to your devic', text: 'Add this web app to your device', close: '[data-testid="button-base"]' },
+    { host: 'playfame.com', name: 'Daily Offer', text: 'Daily Offer', close: '[data-testid="button-base"]' },
+    { host: 'hellomillions.com', name: 'Daily Offer', text: 'Daily Offer', close: '[data-testid="close-modal-button"]' },
+    { host: 'hellomillions.com', name: 'JACKPOTS are available', text: 'JACKPOTS are available', close: '[data-testid="close-modal-button"]' },
+    { host: 'spinblitz.com', name: 'Daily Offer', text: 'Daily Offer', close: '' },
   ];
 
   const LOG = '[PopupCloser]';
@@ -54,6 +55,7 @@
   function autoCloseButton(pop) {
     const cands = [...pop.querySelectorAll('button, [role="button"], a, [aria-label], [class*="close" i], [class*="dismiss" i]')].filter(visible);
     let best = null, bestScore = 0;
+    const iconOnly = cands.filter((b) => !(b.textContent || '').trim() && (b.querySelector('svg, img') || b.tagName === 'BUTTON') && b.getBoundingClientRect().width <= 64);
     for (const b of cands) {
       const label = (b.getAttribute('aria-label') || b.getAttribute('title') || '').toLowerCase();
       const txt = (b.textContent || '').trim();
@@ -62,6 +64,7 @@
       if (/close|dismiss|not now|no thanks/.test(label)) s += 5;
       if (/^(x|×|✕|✖|close|dismiss|no thanks|not now|maybe later)$/i.test(txt)) s += 5;
       if (/close|dismiss/i.test(cls)) s += 3;
+      if (!txt && iconOnly.length === 1 && iconOnly[0] === b) s += 2; // the popup's only icon-only button is almost always its X
       if (!txt && b.querySelector('svg')) {
         s += 2;
         if (/(^|[\s-])(x|close|cross)([\s-]|$)/i.test(String(b.querySelector('svg').getAttribute('class') || ''))) s += 3; // e.g. lucide-x
@@ -72,21 +75,30 @@
     return bestScore >= 3 ? best : null;
   }
 
+  const ACTION_TXT = /^(add|get|buy|claim|collect|install|play|yes|ok|accept|allow|subscribe|spin|redeem|continue|opt in)/i;
+  const squash = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
   function findPopup(rule) {
     let re; try { re = new RegExp(rule.text, 'i'); } catch (e) { return null; }
+    const want = squash(rule.text.replace(/\\(.)/g, '$1'));
     const found = [];
     for (const el of document.querySelectorAll('body *')) {
       if (!isPositioned(el) || !visible(el)) continue;
       if (el.id === 'popupcloser-toast' || el.id === 'popupcloser-pick') continue;
       const t = el.innerText || '';
-      if (t.length > 600 || !re.test(t)) continue;
+      if (t.length > 600) continue;
+      // also look at image alt text / file names (banner titles like "Daily Offer" are often a picture, not text)
+      const imgs = [...el.querySelectorAll('img')].map((i) => (i.alt || '') + ' ' + ((i.currentSrc || i.src || '').split('?')[0].split('/').pop())).join(' ');
+      const hay = t + ' ' + imgs;
+      if (!re.test(hay) && !(want.length >= 6 && squash(hay).indexOf(want) >= 0)) continue;
       const r = el.getBoundingClientRect();
       found.push({ el, area: r.width * r.height });
     }
     found.sort((a, b) => a.area - b.area); // smallest popup that still holds the text and a close button
     for (const f of found) {
       let btn = null;
-      if (rule.close) { try { btn = f.el.querySelector(rule.close); } catch (e) {} }
+      if (rule.close) { // 1.4.0: skip matches that are action buttons (generic selectors like [data-testid="button-base"] also hit Buy/Get buttons)
+        try { btn = [...f.el.querySelectorAll(rule.close)].find((b) => visible(b) && !ACTION_TXT.test((b.textContent || '').trim())) || null; } catch (e) {}
+      }
       if (!btn) btn = autoCloseButton(f.el);
       if (btn) return { popup: f.el, btn };
     }
@@ -153,6 +165,7 @@
       if (!pop) { alert('Could not tell which popup that belongs to. Try again, or use "Add popup by typing".'); return; }
       let phrase = bestPhrase(pop), close = '';
       if (mode === 'x') { const btn = e.target.closest('button,[role="button"],a') || e.target; close = stableSelector(btn); }
+      else if (e.target.tagName === 'IMG') { const fn = ((e.target.currentSrc || e.target.src || '').split('?')[0].split('/').pop() || '').match(/[a-z]{5,}/i); phrase = (e.target.alt && !/image|icon|logo/i.test(e.target.alt) ? e.target.alt : (fn ? fn[0] : phrase)); }
       else { const t = (e.target.innerText || e.target.textContent || '').replace(/\s+/g, ' ').trim(); if (t.length >= 8 && t.length <= 120) phrase = t; }
       const ok = prompt('Phrase that is always in this popup (captured from the page - Enter to accept, or edit):', phrase);
       if (!ok) return;
