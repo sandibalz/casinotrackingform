@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Popup Closer (per-site list)
 // @namespace    https://github.com/sandibalz/casinotrackingform
-// @version      1.6.3
+// @version      1.6.7
 // @description  Closes pop-ups you teach it (e.g. the "Add this web app to your device" bar) on the sites you add. Does nothing on a site that has no rule. Add rules from the Tampermonkey menu.
 // @match        *://*/*
 // @noframes
@@ -10,6 +10,8 @@
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
 // @grant        GM_setClipboard
+// @grant        GM_xmlhttpRequest
+// @connect      api.github.com
 // @updateURL    https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/popupcloser.user.js
 // @downloadURL  https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/popupcloser.user.js
 // ==/UserScript==
@@ -19,7 +21,8 @@
 
   // ---- Built-in rules (shared: these come with the GitHub copy, so every owner gets them) ----
   // Rules added from the Tampermonkey menu are saved only in THAT browser. To share one with everyone, use the menu item
-  // "Copy my rules (to share via GitHub)", paste the lines into DEFAULT_RULES below, bump @version, and push to GitHub.
+  // 1.6.2: with a GitHub token set (menu: "Set GitHub token") every rule you add is also pushed to GitHub automatically
+  // (added to DEFAULT_RULES + @version bumped). Your local copy is removed on its own once the update is installed.
   // host: hostname without "www." (also matches its subdomains)
   // text: regex (case-insensitive) that must appear in the popup's own text
   // close: optional CSS selector for the close button INSIDE the popup; leave '' to auto-find an X / Close button
@@ -34,7 +37,6 @@
     { host: 'spinblitz.com', name: 'Add this web app to your devic', text: 'Add this web app to your device', close: '[data-testid="button-base"]' },
     { host: 'mcluck.com', name: 'Daily Offer', text: 'Daily Offer', close: '[data-testid="close-modal-button"]' },
     { host: 'mcluck.com', name: 'Jackpot opt-in', text: 'JACKPOT is available', close: '[data-testid="close-modal-button"]' },
-    {"host":"megabonanza.com","name":"Buy Now","text":"Buy Now","close":"[data-testid=\"close-modal-button\"]"},
     { host: 'megabonanza.com', name: 'Collect 10 SC in any game', text: 'Collect 10 SC in any game', close: '[data-testid="quest-lines-sequential-slim-dialog-close-button"]' },
     { host: 'megabonanza.com', name: 'Buy Now', text: 'Buy Now', close: '[data-testid="close-modal-button"]' },
   ];
@@ -51,6 +53,102 @@
   const hostMatches = (h) => host === h || host.endsWith('.' + h);
   const rulesHere = () => DEFAULT_RULES.concat(userRules()).filter((r) => r && r.host && hostMatches(r.host.replace(/^www\./, '')));
   const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // ---- GitHub sync (1.6.2) ----
+  const REPO = 'sandibalz/casinotrackingform', REPO_FILE = 'popupcloser.user.js', REPO_BRANCH = 'main', TOKEN_KEY = 'popupCloserGhToken';
+  const unesc = (s) => String(s || '').replace(/\\(.)/g, '$1');
+  const nh = (h) => String(h || '').replace(/^www\./, '').toLowerCase();
+  const ruleKey = (r) => nh(r.host) + '|' + unesc(r.text).toLowerCase();
+  const q = (s) => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
+  // Once an update that contains one of your local rules is installed, the local copy is redundant - drop it.
+  (function prune() {
+    const u = userRules(); if (!u.length) return;
+    const have = new Set(DEFAULT_RULES.map(ruleKey));
+    const keep = u.filter((r) => !have.has(ruleKey(r)));
+    if (keep.length !== u.length) sv(KEY, keep);
+  })();
+
+  function ghReq(method, body) {
+    const token = gv(TOKEN_KEY, '');
+    return new Promise((resolve, reject) => {
+      if (!token) { reject(Object.assign(new Error('No GitHub token set'), { status: 0 })); return; }
+      GM_xmlhttpRequest({
+        method, anonymous: true,
+        url: 'https://api.github.com/repos/' + REPO + '/contents/' + REPO_FILE + (method === 'GET' ? '?ref=' + REPO_BRANCH + '&t=' + Date.now() : ''),
+        headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' },
+        data: body ? JSON.stringify(body) : undefined,
+        onload: (r) => {
+          let j = null; try { j = JSON.parse(r.responseText); } catch (e) {}
+          if (r.status >= 200 && r.status < 300) resolve(j);
+          else reject(Object.assign(new Error('HTTP ' + r.status + (j && j.message ? ': ' + j.message : '')), { status: r.status }));
+        },
+        onerror: (r) => reject(Object.assign(new Error('Network error' + (r && (r.error || r.statusText) ? ' (' + (r.error || r.statusText) + ')' : '') + ' [token length ' + token.length + ']'), { status: -1 })),
+        ontimeout: () => reject(Object.assign(new Error('GitHub timed out'), { status: -1 })),
+        timeout: 20000,
+      });
+    });
+  }
+
+  // menu "Test GitHub connection": step 1 = can this browser reach api.github.com at all, step 2 = does the token work
+  function testGitHub() {
+    const out = [];
+    GM_xmlhttpRequest({
+      method: 'GET', url: 'https://api.github.com/zen', timeout: 20000,
+      onload: (r) => { out.push('1. Reach GitHub (no token): OK, HTTP ' + r.status); step2(); },
+      onerror: (r) => { out.push('1. Reach GitHub (no token): FAILED ' + ((r && (r.error || r.statusText)) || '(no detail)') + ' - the browser/network/extension is blocking api.github.com, not the token.'); alert(out.join('\n')); },
+      ontimeout: () => { out.push('1. Reach GitHub: TIMED OUT'); alert(out.join('\n')); },
+    });
+    function step2() {
+      const tk = gv(TOKEN_KEY, '');
+      out.push('   token saved: ' + (tk ? 'yes, ' + tk.length + ' chars, ' + tk.slice(0, 15) + '...' + tk.slice(-4) + (/[^\x21-\x7e]/.test(tk) ? ' - CONTAINS BAD CHARACTERS, re-paste it' : '') : 'NO'));
+      // 1.6.6: who-am-I check with both header styles, cookies off, so we can tell "token is bad" from "request is built wrong"
+      const who = (scheme, next) => GM_xmlhttpRequest({
+        method: 'GET', url: 'https://api.github.com/user', anonymous: true, timeout: 20000,
+        headers: { Authorization: scheme + ' ' + tk, Accept: 'application/vnd.github+json' },
+        onload: (r) => { let j = {}; try { j = JSON.parse(r.responseText); } catch (e) {} out.push('   /user with "' + scheme + '": HTTP ' + r.status + (j.login ? ' - logged in as ' + j.login : j.message ? ' - ' + j.message : '')); next(); },
+        onerror: () => { out.push('   /user with "' + scheme + '": network error'); next(); },
+        ontimeout: () => { out.push('   /user with "' + scheme + '": timed out'); next(); },
+      });
+      who('Bearer', () => who('token', () => {
+        ghReq('GET').then(() => { out.push('2. Token + repo file: OK (' + REPO_FILE + ')'); alert(out.join('\n')); })
+          .catch((e) => { out.push('2. Token + repo file: FAILED - ' + ghErr(e)); alert(out.join('\n')); });
+      }));
+    }
+  }
+  const decodeFile = (f) => decodeURIComponent(escape(atob(String(f.content).replace(/\s/g, '')))).replace(/\r\n/g, '\n');
+  const ghErr = (e) => e.status === 401 ? 'GitHub rejected the token - GitHub says: ' + e.message + '. (wrong, expired or revoked; use "Set GitHub token" again)'
+    : (e.status === 403 || e.status === 404) ? 'The token has no write access to ' + REPO + ' (needs Contents: Read and write). ' + e.message
+    : e.message;
+
+  // mutate(text) -> { text, summary } or { nochange: 'why' }. Re-reads and retries if someone else pushed in between.
+  async function editRepo(mutate) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const f = await ghReq('GET');
+      const res = mutate(decodeFile(f));
+      if (res.nochange) return res;
+      let out = res.text.replace(/(\/\/ @version\s+)(\d+)\.(\d+)\.(\d+)/, (m, a, x, y, z) => a + x + '.' + y + '.' + (+z + 1));
+      const v = (out.match(/\/\/ @version\s+(\S+)/) || [])[1];
+      try {
+        await ghReq('PUT', { message: 'Popup Closer v' + v + ': ' + res.summary, content: btoa(unescape(encodeURIComponent(out))), sha: f.sha, branch: REPO_BRANCH });
+        return { version: v, summary: res.summary };
+      } catch (e) { if (e.status === 409 || e.status === 422) continue; throw e; }
+    }
+    throw new Error('GitHub kept changing while saving - try again.');
+  }
+  function ruleBlock(t) {
+    const s = t.indexOf('const DEFAULT_RULES = ['); if (s < 0) throw new Error('DEFAULT_RULES not found in the GitHub copy');
+    const e = t.indexOf('\n  ];', s); if (e < 0) throw new Error('End of DEFAULT_RULES not found in the GitHub copy');
+    return { s, e };
+  }
+  const addMutator = (rules) => (t) => {
+    const b = ruleBlock(t); const have = new Set();
+    t.slice(b.s, b.e).split('\n').forEach((l) => { const m = l.match(/host:\s*'((?:[^'\\]|\\.)*)'.*?text:\s*'((?:[^'\\]|\\.)*)'/); if (m) have.add(nh(unesc(m[1])) + '|' + unesc(m[2]).toLowerCase()); });
+    const add = rules.filter((r) => { const k = ruleKey(r); if (have.has(k)) return false; have.add(k); return true; });
+    if (!add.length) return { nochange: 'already on GitHub' };
+    const lines = add.map((r) => '    { host: ' + q(nh(r.host)) + ', name: ' + q(r.name || '') + ', text: ' + q(unesc(r.text)) + ', close: ' + q(r.close || '') + ' },');
+    return { text: t.slice(0, b.e) + '\n' + lines.join('\n') + t.slice(b.e), summary: 'add ' + add.map((r) => nh(r.host) + ' "' + String(r.name || unesc(r.text)).slice(0, 30) + '"').join(', ') };
+  };
+  const doneMsg = (res) => res.nochange ? 'Nothing to push: ' + res.nochange + '.' : 'Pushed to GitHub as v' + res.version + ' (' + res.summary + ').\nOther owners get it at their next update check. In this browser your local copy keeps working until the update is installed, then removes itself.';
 
   // ---- helpers ----
   const visible = (el) => {
@@ -146,7 +244,40 @@
   }
 
   // ---- adding rules (Tampermonkey menu) ----
-  function addRule(r) { const all = userRules(); all.push(r); sv(KEY, all); alert('Saved: ' + r.host + ' -> "' + r.text + '"\nReload the page to start it.'); }
+  function addRule(r) {
+    const all = userRules(); all.push(r); sv(KEY, all);
+    const head = 'Saved: ' + r.host + ' -> "' + unesc(r.text) + '"\nReload the page to start it.\n\n';
+    if (!gv(TOKEN_KEY, '')) { alert(head + 'Not pushed to GitHub (no token set - menu: "Set GitHub token").'); return; }
+    editRepo(addMutator([r])).then((res) => alert(head + doneMsg(res))).catch((e) => alert(head + 'GitHub push FAILED (rule is still saved locally): ' + ghErr(e)));
+  }
+
+  function setToken() {
+    const t = prompt('Paste the GitHub token (fine-grained, ' + REPO + ', Contents: Read and write). Blank = remove it:', '');
+    if (t === null) return;
+    if (t.trim() && !/^[A-Za-z0-9_]{20,255}$/.test(t.trim())) { alert('That does not look like a GitHub token (' + t.trim().length + ' characters; a token is one unbroken word of letters/numbers/underscores, starting github_pat_). Copy the token from GitHub again and retry. Nothing was saved.'); return; }
+    sv(TOKEN_KEY, t.trim());
+    if (!t.trim()) { alert('Token removed from this browser.'); return; }
+    ghReq('GET').then(() => alert('Token works.')).catch((e) => alert('Saved, but the test failed: ' + ghErr(e)));
+  }
+
+  function pushLocal() {
+    const all = userRules(); if (!all.length) { alert('No local rules to push.'); return; }
+    editRepo(addMutator(all)).then((res) => alert(doneMsg(res))).catch((e) => alert('GitHub push FAILED: ' + ghErr(e)));
+  }
+
+  function removeFromGitHub() {
+    ghReq('GET').then((f) => {
+      const t = decodeFile(f); const b = ruleBlock(t);
+      const rows = t.slice(b.s, b.e).split('\n').filter((l) => /^\s*\{.*\},?\s*$/.test(l));
+      if (!rows.length) { alert('No built-in rules on GitHub.'); return; }
+      const n = prompt('Built-in rules on GitHub (type a number to DELETE it for everyone, blank = cancel):\n' + rows.map((l, i) => (i + 1) + '. ' + l.trim()).join('\n'));
+      const i = parseInt(n, 10) - 1; if (!(i >= 0 && i < rows.length)) return;
+      const line = rows[i];
+      return editRepo((tt) => { const bb = ruleBlock(tt); const blk = tt.slice(bb.s, bb.e); const at = blk.indexOf(line); if (at < 0) return { nochange: 'that rule is already gone' };
+        const from = bb.s + at; return { text: tt.slice(0, from - 1) + tt.slice(from + line.length), summary: 'remove ' + line.trim().slice(0, 60) }; })
+        .then((res) => alert(res.nochange ? 'Nothing to remove: ' + res.nochange + '.' : 'Removed on GitHub as v' + res.version + '.'));
+    }).catch((e) => alert('GitHub FAILED: ' + ghErr(e)));
+  }
 
   function stableSelector(btn) {
     for (const a of ['data-testid', 'aria-label', 'id']) { const v = btn.getAttribute(a); if (v && v.length < 60) return a === 'id' ? '#' + CSS.escape(v) : '[' + a + '="' + v.replace(/"/g, '\\"') + '"]'; }
@@ -204,7 +335,7 @@
     const all = userRules();
     if (!all.length) { alert('You have no menu-added rules to copy.'); return; }
     const txt = all.map((r) => '    ' + JSON.stringify({ host: r.host, name: r.name, text: r.text.replace(/\\(.)/g, '$1'), close: r.close || '' }) + ',').join('\n');
-    try { GM_setClipboard(txt); alert('Copied ' + all.length + ' rule line(s).\n\nNow double-click add-popup-rules.bat in the TamperMonkeyFormScript folder. It adds them to the script, bumps the version and copies the whole script - paste that into GitHub.\n\n(Then delete them from your own list so they are not doubled.)'); }
+    try { GM_setClipboard(txt); alert('Copied ' + all.length + ' rule line(s). (Manual fallback - normally "Push my local rules to GitHub" does this for you.)'); }
     catch (e) { prompt('Copy these lines into DEFAULT_RULES:', txt); }
   }
 
@@ -213,7 +344,11 @@
     GM_registerMenuCommand('➕ Add popup (click its text)', () => pickMode('text'));
     GM_registerMenuCommand('➕ Add popup by typing…', addByTyping);
     GM_registerMenuCommand('📋 Show / delete my rules', manage);
-    GM_registerMenuCommand('📤 Copy my rules (to share via GitHub)', copyRules);
+    GM_registerMenuCommand('⬆ Push my local rules to GitHub', pushLocal);
+    GM_registerMenuCommand('🗑 Remove a built-in rule (on GitHub)', removeFromGitHub);
+    GM_registerMenuCommand('🔑 Set GitHub token', setToken);
+    GM_registerMenuCommand('🔍 Test GitHub connection', testGitHub);
+    GM_registerMenuCommand('📤 Copy my rules (manual fallback)', copyRules);
     GM_registerMenuCommand('▶ Run closer now (this page)', () => { sweep(); const r = rulesHere(); toast(r.length ? 'Ran ' + r.length + ' rule(s)' : 'No rules for ' + host); });
   } catch (e) {}
 })();
