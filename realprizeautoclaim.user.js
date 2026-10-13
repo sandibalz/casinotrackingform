@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.10.2
+// @version      1.10.3
 // @description  On RealPrize and LoneStar Casino: clicks daily/grand prize COLLECT and any button whose text says collect / claim / free spins (incl. image-based Claim Now popups, CLAIM PRIZE, SPIN & WIN), and closes popups that show a price (e.g. 4.99, 19.99)
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -92,6 +92,10 @@
 //          text and got clicked, stopping/restarting the profile in an endless loop.
 // v1.9.2 – bare "Free Spins" buttons (e.g. LoneStar's top-right nav button) are no longer clicked
 //          on page load; free-spin-only labels are clicked only inside a popup/dialog layer.
+// v1.10.3 – realprize.com moved to a new React/Tailwind site (old #daily_prize_*/#daily_button/#coinswitch ids are gone) and the broad
+//           text matching started clicking random things. On realprize.com ONLY (NEW_RP) the script now: never closes price popups,
+//           skips the image-popup path and the CLAIM PRIZE / SPIN & WIN launch scan, and clicks only an element whose whole text is
+//           Claim/Collect (+Now/Reward/Bonus/Prize) INSIDE a popup. Everything else is just logged (SEEN). LoneStar unchanged.
 // v1.10.2 – SEEN log: records the text of every popup that appears (once per page load), even if the script does nothing with it.
 // v1.10.1 – fixed top/bottom bars and pointer-events:none layers no longer count as popups (nav Free Spins button was still clicked).
 // v1.10.0 – run log + overlay like Punt/Chanced: every click / popup close / site reply is stored per owner in Tampermonkey
@@ -153,6 +157,7 @@
     // ── v1.10.0: per-owner run log (Tampermonkey storage) + live overlay (same idea as Punt/Chanced) ──
     const IS_TOP     = window.top === window.self;
     const SITE       = /lonestar/i.test(location.hostname) ? 'LoneStar' : 'RealPrize';
+    const NEW_RP     = SITE === 'RealPrize';   // v1.10.3: strict mode on the new realprize.com frontend
     const RESULT_RE  = /error|invalid|already|expired|not valid|failed|success|claimed|congrat|added|received|reward|collected/i;
     const ERROR_RE   = /error|invalid|already|expired|not valid|failed/i;
     const NOISY_LOG_RE = /^(Launch scan:|Launch-window button scan)/;   // console only, not stored
@@ -464,7 +469,7 @@
 
     let lastPopupScanAt = 0;
     function closePricePopups() {
-        if (!CLOSE_PRICE_POPUPS) return;
+        if (!CLOSE_PRICE_POPUPS || NEW_RP) return;
         if (now() - lastPopupScanAt < 700) return; // throttle: mutation bursts must not run this every 150ms
         lastPopupScanAt = now();
         const roots = [];
@@ -658,6 +663,14 @@
 
     // ── Broad Collect / Claim Now search ───────────────────────────────────────
     function findAnyCollectButton() {
+        if (NEW_RP) {   // v1.10.3: only an exact Claim/Collect label inside a popup
+            for (const pop of popupRoots()) {
+                if (inCollectorUi(pop)) continue;
+                const el = findFreeClaimEl(pop);
+                if (el && allowClick(el, false)) return [el];
+            }
+            return [];
+        }
         const candidates = gatherDeep(
             'button, a, [role="button"], [class*="btn" i], [class*="button" i], [class*="collect" i], [id*="collect" i], [class*="claim" i], [id*="claim" i]'
         );
@@ -683,6 +696,7 @@
 
     // ── Image-based Claim Now popup (the one you showed) ───────────────────────
     function findImageBasedClaimNow() {
+        if (NEW_RP) return null;   // v1.10.3
         // Look for the specific popup images used by LoneStar
         const imgs = gatherDeep('img[src*="cdn.lonestarcasino.com/pops/"], img[src*="/pops/"]');
 
@@ -821,6 +835,7 @@
 
     // ── Launch-window button scan ──────────────────────────────────────────────
     function clickLaunchButtons() {
+        if (NEW_RP) return;   // v1.10.3
         lastLaunchCheckAt = now();
         const btns = [];
         collectDeep(document, 'button, [role="button"]', btns);
@@ -918,5 +933,5 @@
     // ── Polling fallback ───────────────────────────────────────────────────────
     setInterval(scanAndClaim, POLL_INTERVAL_MS);
     armLaunchScan('page load');
-    log(`v1.10.2 loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), and launch buttons…`);
+    log(`v1.10.3 loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), and launch buttons…`);
 })();
