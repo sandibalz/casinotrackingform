@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Popup Closer (per-site list)
 // @namespace    https://github.com/sandibalz/casinotrackingform
-// @version      1.6.0
+// @version      1.6.2
 // @description  Closes pop-ups you teach it (e.g. the "Add this web app to your device" bar) on the sites you add. Does nothing on a site that has no rule. Add rules from the Tampermonkey menu.
 // @match        *://*/*
 // @noframes
@@ -34,6 +34,7 @@
     { host: 'spinblitz.com', name: 'Add this web app to your devic', text: 'Add this web app to your device', close: '[data-testid="button-base"]' },
     { host: 'mcluck.com', name: 'Daily Offer', text: 'Daily Offer', close: '[data-testid="close-modal-button"]' },
     { host: 'mcluck.com', name: 'Jackpot opt-in', text: 'JACKPOT is available', close: '[data-testid="close-modal-button"]' },
+    {"host":"megabonanza.com","name":"Buy Now","text":"Buy Now","close":"[data-testid=\"close-modal-button\"]"},
   ];
 
   const LOG = '[PopupCloser]';
@@ -201,7 +202,7 @@
     const all = userRules();
     if (!all.length) { alert('You have no menu-added rules to copy.'); return; }
     const txt = all.map((r) => '    ' + JSON.stringify({ host: r.host, name: r.name, text: r.text.replace(/\\(.)/g, '$1'), close: r.close || '' }) + ',').join('\n');
-    try { GM_setClipboard(txt); alert('Copied ' + all.length + ' rule line(s). Paste them inside DEFAULT_RULES in the script file, bump @version, push to GitHub. (Then delete them from your own list so they are not doubled.)'); }
+    try { GM_setClipboard(txt); alert('Copied ' + all.length + ' rule line(s).\n\nNow double-click add-popup-rules.bat in the TamperMonkeyFormScript folder. It adds them to the script, bumps the version and copies the whole script - paste that into GitHub.\n\n(Then delete them from your own list so they are not doubled.)'); }
     catch (e) { prompt('Copy these lines into DEFAULT_RULES:', txt); }
   }
 
