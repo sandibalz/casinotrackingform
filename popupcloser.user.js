@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Popup Closer (per-site list)
 // @namespace    https://github.com/sandibalz/casinotrackingform
-// @version      1.6.10
+// @version      1.6.11
 // @description  Closes pop-ups you teach it (e.g. the "Add this web app to your device" bar) on the sites you add. Does nothing on a site that has no rule. Add rules from the Tampermonkey menu.
 // @match        *://*/*
 // @noframes
@@ -42,6 +42,7 @@
     { host: 'stackrcasino.com', name: 'mission', text: 'mission', close: '[aria-label="close"]' },
     { host: 'jackpota.com', name: 'jackpot', text: 'jackpot', close: '' },
     { host: 'jackpota.com', name: 'to your device', text: 'to your device', close: '' },
+    { host: 'spinblitz.com', name: 'buy now $', text: 'buy now $', close: '[data-testid="close-modal-button"]' },
   ];
 
   const LOG = '[PopupCloser]';
