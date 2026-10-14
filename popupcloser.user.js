@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Popup Closer (per-site list)
 // @namespace    https://github.com/sandibalz/casinotrackingform
-// @version      1.6.12
+// @version      1.6.13
 // @description  Closes pop-ups you teach it (e.g. the "Add this web app to your device" bar) on the sites you add. Does nothing on a site that has no rule. Add rules from the Tampermonkey menu.
 // @match        *://*/*
 // @noframes
@@ -199,7 +199,7 @@
     const found = [];
     for (const el of document.querySelectorAll('body *')) {
       if (!isPositioned(el) || !visible(el)) continue;
-      if (el.id === 'popupcloser-toast' || el.id === 'popupcloser-pick') continue;
+      if (el.id === 'popupcloser-toast' || el.id === 'popupcloser-pick' || el.id === 'popupcloser-log') continue;
       const t = el.innerText || '';
       if (t.length > 600) continue;
       // also look at image alt text / file names (banner titles like "Daily Offer" are often a picture, not text)
@@ -230,6 +230,23 @@
     } catch (e) {}
   }
 
+  // 1.6.13: small bottom-left overlay listing every popup actually closed on this page load (successful clicks only). Click the pill to expand/collapse.
+  const closedLog = [];
+  function logClosed(rule) {
+    try {
+      closedLog.push({ name: rule.name || rule.text, t: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) });
+      let box = document.getElementById('popupcloser-log');
+      if (!box) {
+        box = document.createElement('div'); box.id = 'popupcloser-log';
+        box.style.cssText = 'position:fixed;left:12px;bottom:48px;z-index:2147483646;background:#111;color:#9f9;font:11px/1.4 sans-serif;padding:4px 8px;border-radius:6px;opacity:.85;cursor:pointer;max-width:260px';
+        box.addEventListener('click', () => { box._open = !box._open; render(); });
+        (document.body || document.documentElement).appendChild(box);
+      }
+      const render = () => { box.innerHTML = ''; const h = document.createElement('div'); h.textContent = '✓ Popup Closer: ' + closedLog.length + ' closed' + (box._open ? '' : ' ▸'); box.appendChild(h); if (box._open) closedLog.forEach((e) => { const d = document.createElement('div'); d.textContent = e.t + '  ' + e.name; box.appendChild(d); }); };
+      render();
+    } catch (e) {}
+  }
+
   // ---- watcher ----
   const counts = new Map();
   let lastRun = 0, timer = null;
@@ -239,7 +256,7 @@
       const n = counts.get(rule) || 0; if (n >= MAX_CLOSES_PER_RULE) continue;
       const hit = findPopup(rule); if (!hit) continue;
       counts.set(rule, n + 1);
-      try { hit.btn.click(); console.log(LOG, 'closed "' + (rule.name || rule.text) + '"'); toast('Closed: ' + (rule.name || rule.text)); } catch (e) { console.warn(LOG, 'click failed', e); }
+      try { hit.btn.click(); console.log(LOG, 'closed "' + (rule.name || rule.text) + '"'); toast('Closed: ' + (rule.name || rule.text)); logClosed(rule); } catch (e) { console.warn(LOG, 'click failed', e); }
     }
   }
   function schedule() { const now = Date.now(); clearTimeout(timer); timer = setTimeout(() => { lastRun = Date.now(); sweep(); }, Math.max(300, 1000 - (now - lastRun))); }
