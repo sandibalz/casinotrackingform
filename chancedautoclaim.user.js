@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chanced Auto Claim Promo Code
 // @namespace    https://chanced.com/
-// @version      1.2.1
+// @version      1.2.2
 // @description  When the Get Coins dialog's Promotion Codes tab is open with a code already filled in (e.g. from the autologin URL), clicks Submit once per code. v1.2.0: logs each run (found / clicked / site response) per owner in Tampermonkey storage and shows a live log overlay.
 // @match        https://chanced.com/*
 // @run-at       document-idle
@@ -31,7 +31,7 @@
     const RESULT_RE = /error|invalid|maximum|already|expired|not valid|reached|success|claimed|congrat|added|received|reward/i;
     const ERROR_RE = /error|invalid|maximum|already|expired|not valid|reached|failed/i;
     const runLog = [];          // this page run only, shown in the overlay
-    let overlayEl = null, overlayBody = null;
+    let overlayEl = null, overlayBody = null, overlayBox = null, overlayPill = null, overlayOpen = false;
 
     function getOwner(forcePrompt) {
         let owner = GM_getValue('owner', '');
@@ -59,34 +59,47 @@
 
     function ensureOverlay() {
         if (overlayEl || !document.body) return;
+        // v1.2.2: collapsed pill (like Popup Closer's) in a shared bottom-left stack; click to open the log, click again to collapse.
+        let stack = document.getElementById('tm-badge-stack');
+        if (!stack) {
+            stack = document.createElement('div');
+            stack.id = 'tm-badge-stack';
+            stack.style.cssText = 'position:fixed;left:12px;bottom:168px;z-index:2147483646;display:flex;flex-direction:column-reverse;align-items:flex-start;gap:2px;pointer-events:none;';
+            document.body.appendChild(stack);
+        }
         overlayEl = document.createElement('div');
-        overlayEl.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:2147483647;width:340px;max-height:220px;background:#111;color:#eee;font:12px/1.4 monospace;border:1px solid #555;border-radius:6px;box-shadow:0 2px 10px #000a;display:flex;flex-direction:column;';
+        overlayEl.style.cssText = 'display:flex;flex-direction:column;align-items:flex-start;gap:2px;pointer-events:none;';
+        const box = document.createElement('div');
+        box.style.cssText = 'display:none;width:340px;max-height:220px;background:#111;color:#eee;font:12px/1.4 monospace;border:1px solid #555;border-radius:6px;box-shadow:0 2px 10px #000a;flex-direction:column;pointer-events:auto;';
         const bar = document.createElement('div');
         bar.style.cssText = 'display:flex;justify-content:space-between;padding:4px 8px;background:#222;border-radius:6px 6px 0 0;';
         const title = document.createElement('span');
         title.textContent = SITE + ' AutoClaim - ' + getOwner();
-        const btns = document.createElement('span');
         const copy = document.createElement('button');
         copy.textContent = 'Copy';
-        copy.style.cssText = 'margin-right:6px;cursor:pointer;';
+        copy.style.cssText = 'cursor:pointer;';
         copy.onclick = () => { try { navigator.clipboard.writeText(runLog.map(fmt).join('\n')); } catch (e) {} };
-        const close = document.createElement('button');
-        close.textContent = 'x';
-        close.style.cssText = 'cursor:pointer;';
-        close.onclick = () => { overlayEl.remove(); overlayEl = null; overlayBody = null; };
-        btns.append(copy, close);
-        bar.append(title, btns);
+        bar.append(title, copy);
         overlayBody = document.createElement('div');
         overlayBody.style.cssText = 'padding:6px 8px;overflow:auto;white-space:pre-wrap;';
-        overlayEl.append(bar, overlayBody);
-        document.body.appendChild(overlayEl);
+        box.append(bar, overlayBody);
+        overlayPill = document.createElement('div');
+        overlayPill.style.cssText = 'background:#111;color:#9f9;font:11px/1.4 sans-serif;padding:4px 8px;border-radius:6px;opacity:.85;cursor:pointer;pointer-events:auto;';
+        overlayPill.onclick = () => { overlayOpen = !overlayOpen; renderOverlay(); };
+        overlayBox = box;
+        overlayEl.append(box, overlayPill);
+        stack.appendChild(overlayEl);
     }
 
     function renderOverlay() {
         ensureOverlay();
         if (overlayBody) {
             overlayBody.textContent = runLog.map(fmt).join('\n');
-            overlayBody.scrollTop = overlayBody.scrollHeight;
+            overlayBox.style.display = overlayOpen ? 'flex' : 'none';
+            const warns = runLog.filter(x => ERROR_RE.test(x.detail || '') || /error/i.test(x.event || '')).length;
+            overlayPill.textContent = '\u2713 ' + SITE + ' AutoClaim: ' + runLog.length + ' events' + (warns ? ' (' + warns + ' warn)' : '') + (overlayOpen ? '' : ' \u25B8');
+            overlayPill.style.color = warns ? '#ff8a80' : '#9f9';
+            if (overlayOpen) overlayBody.scrollTop = overlayBody.scrollHeight;
         }
     }
 
@@ -94,6 +107,7 @@
         const hist = GM_getValue('claimLog_' + getOwner(), []);
         runLog.length = 0;
         hist.slice(-40).forEach(e => runLog.push(e));
+        overlayOpen = true;
         renderOverlay();
     }
 
