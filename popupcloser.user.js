@@ -238,11 +238,11 @@
       let box = document.getElementById('popupcloser-log');
       if (!box) {
         box = document.createElement('div'); box.id = 'popupcloser-log';
-        box.style.cssText = 'position:fixed;left:12px;bottom:48px;z-index:2147483646;background:#111;color:#9f9;font:11px/1.4 sans-serif;padding:4px 8px;border-radius:6px;opacity:.85;cursor:pointer;max-width:260px';
+        box.style.cssText = 'position:fixed;left:12px;bottom:84px;z-index:2147483646;background:#111;color:#9f9;font:11px/1.4 sans-serif;padding:4px 8px;border-radius:6px;opacity:.85;cursor:pointer;max-width:260px';
         box.addEventListener('click', () => { box._open = !box._open; render(); });
         (document.body || document.documentElement).appendChild(box);
       }
-      const render = () => { box.innerHTML = ''; const h = document.createElement('div'); h.textContent = '✓ Popup Closer: ' + closedLog.length + ' closed' + (box._open ? '' : ' ▸'); box.appendChild(h); if (box._open) closedLog.forEach((e) => { const d = document.createElement('div'); d.textContent = e.t + '  ' + e.name; box.appendChild(d); }); };
+      const render = () => { box.innerHTML = ''; const h = document.createElement('div'); h.textContent = '✓ Popup Closer v' + ((typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '?') + ': ' + closedLog.length + ' closed' + (box._open ? '' : ' ▸'); box.appendChild(h); if (box._open) closedLog.forEach((e) => { const d = document.createElement('div'); d.textContent = e.t + '  ' + e.name; box.appendChild(d); }); };
       render();
     } catch (e) {}
   }
