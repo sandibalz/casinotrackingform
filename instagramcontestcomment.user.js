@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Instagram Contest Comment Helper
 // @namespace    http://tampermonkey.net/
-// @version      1.3.2
+// @version      1.3.3
 // @description  Instagram "comment your answer + #tag" contests (ONLY on posts by usernames listed in POSTERS): reads the comments, finds the most common answer among comments that carry the post's hashtag, and types that comment into the comment box. NEVER clicks Post - you review it and post it yourself.
 // @match        https://www.instagram.com/*
 // @run-at       document-idle
@@ -27,7 +27,7 @@
   const TAG_OVERRIDE = '';      // e.g. '#playfame' to force the required hashtag
   const LOG = '[IG Contest]';
   // The script does NOTHING on a post unless its poster is listed here (Instagram username, no @).
-  const POSTERS = ['play.fame', 'hellomillions.official', 'spinblitz.official'];
+  const POSTERS = ['play.fame', 'hellomillions.official', 'spinblitz.official', 'mcluck.com.official'];
   const norm = p => String(p || '').trim().toLowerCase().replace(/^@/, '');
   const BUILTIN = new Set(POSTERS.map(norm)); // the shared list; the Tampermonkey menu adds to it via GitHub
   const RESERVED = new Set(['reels', 'reel', 'explore', 'direct', 'accounts', 'p', 'stories', 'tv', 'about', 'legal', 'web', 'popular', 'developer']);
