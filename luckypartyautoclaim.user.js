@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LuckyParty Auto Claim Now
 // @namespace    https://luckparty.com/
-// @version      1.3.0
+// @version      1.3.1
 // @description  Closes any popups (including iframe-embedded ones) blocking the way, then finds <div class="button-content">Claim Now</div> on luckparty.com and clicks the Claim Now button. Leaves the Coin Store dialog alone, and leaves any popup with its own unclaimed "Claim Now" button alone too (so it gets claimed, not closed).
 // @match        https://luckparty.com/*
 // @run-at       document-idle
@@ -12,6 +12,47 @@
 
 (function () {
     'use strict';
+
+    // ---- badge (10/14/26): collapsed bottom-left pill with a log; click to open/close. Same look as Popup Closer's. ----
+    const BADGE_NAME = 'LuckyParty Auto Claim', BADGE_VER = '1.3.1';
+    const badgeLines = []; let badgeOpen = false, badgePill = null, badgeBox = null, badgeWarn = 0;
+    function badgeRender() {
+        try {
+            if (window.top !== window.self || !document.body) return;
+            if (!badgePill || !badgePill.isConnected) {
+                let stack = document.getElementById('tm-badge-stack');
+                if (!stack) {
+                    stack = document.createElement('div'); stack.id = 'tm-badge-stack';
+                    stack.style.cssText = 'position:fixed;left:12px;bottom:168px;z-index:2147483646;display:flex;flex-direction:column-reverse;align-items:flex-start;gap:2px;pointer-events:none;';
+                    document.body.appendChild(stack);
+                }
+                const wrap = document.createElement('div');
+                wrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-start;gap:2px;pointer-events:none;';
+                badgeBox = document.createElement('div');
+                badgeBox.style.cssText = 'display:none;width:320px;max-height:200px;overflow:auto;background:#111;color:#eee;font:11px/1.4 monospace;border:1px solid #555;border-radius:6px;padding:6px 8px;white-space:pre-wrap;box-shadow:0 2px 10px #000a;pointer-events:auto;';
+                badgePill = document.createElement('div');
+                badgePill.style.cssText = 'background:#111;color:#9f9;font:11px/1.4 sans-serif;padding:4px 8px;border-radius:6px;opacity:.85;cursor:pointer;pointer-events:auto;';
+                badgePill.addEventListener('click', () => { badgeOpen = !badgeOpen; badgeRender(); });
+                wrap.append(badgeBox, badgePill); stack.appendChild(wrap);
+            }
+            badgeBox.style.display = badgeOpen ? 'block' : 'none';
+            if (badgeOpen) { badgeBox.textContent = badgeLines.length ? badgeLines.join('\n') : '(nothing yet)'; badgeBox.scrollTop = badgeBox.scrollHeight; }
+            badgePill.textContent = '✓ ' + BADGE_NAME + ' v' + BADGE_VER + ': ' + badgeLines.length + ' events' + (badgeWarn ? ' (' + badgeWarn + ' warn)' : '') + (badgeOpen ? '' : ' ▸');
+            badgePill.style.color = badgeWarn ? '#ff8a80' : '#9f9';
+        } catch (e) {}
+    }
+    function badgeAdd(text, warn) {
+        badgeLines.push(new Date().toLocaleTimeString() + ' ' + text);
+        if (badgeLines.length > 60) badgeLines.shift();
+        if (warn || /error|fail|abort|giving up|can't|cannot/i.test(text)) badgeWarn++;
+        badgeRender();
+    }
+    // console.log that also lands in the pill (element arguments are shown as <tag>)
+    function badgeLog(...args) {
+        console.log(...args);
+        badgeAdd(args.map((a) => (a && a.nodeType === 1) ? '<' + a.tagName.toLowerCase() + '>' : String(a)).join(' ').replace(/^\[[^\]]*\]\s*/, ''));
+    }
+    badgeRender();
 
     // Elements we've already clicked, so we don't spam-click the same button.
     const clicked = new WeakSet();
@@ -119,7 +160,7 @@
     function closePopups() {
         const { found, blockedFrameCount } = findPopupCloseIcons();
         if (blockedFrameCount > 0) {
-            console.log(`[Auto Claim Now] ${blockedFrameCount} cross-origin iframe(s) present — can't check those for popups.`);
+            badgeLog(`[Auto Claim Now] ${blockedFrameCount} cross-origin iframe(s) present — can't check those for popups.`);
         }
         for (const iconEl of found) {
             const target = closeTargetFor(iconEl);
@@ -129,7 +170,7 @@
             if (hasUnclaimedClaimButton(target)) continue; // let scan() claim it first, don't close it out from under the claim
 
             closedPopups.add(target);
-            console.log('[Auto Claim Now] closing popup', target);
+            badgeLog('[Auto Claim Now] closing popup', target);
             robustClick(target);
         }
     }
@@ -164,7 +205,7 @@
             if (!isVisible(target)) continue;
 
             clicked.add(target);
-            console.log('[Auto Claim Now] clicking', target);
+            badgeLog('[Auto Claim Now] clicking', target);
             target.click();
         }
     }
