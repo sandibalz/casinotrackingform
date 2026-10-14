@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.10.3
+// @version      1.10.4
 // @description  On RealPrize and LoneStar Casino: clicks daily/grand prize COLLECT and any button whose text says collect / claim / free spins (incl. image-based Claim Now popups, CLAIM PRIZE, SPIN & WIN), and closes popups that show a price (e.g. 4.99, 19.99)
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -666,8 +666,8 @@
         if (NEW_RP) {   // v1.10.3: only an exact Claim/Collect label inside a popup
             for (const pop of popupRoots()) {
                 if (inCollectorUi(pop)) continue;
-                const el = findFreeClaimEl(pop);
-                if (el && allowClick(el, false)) return [el];
+                const el = findFreeClaimEl(pop) || pop.querySelector('button[aria-label*="claim" i], button[aria-label*="collect" i]'); // v1.10.4: image-only button, aria-label "Claim your reward"
+                if (el && isVisibleLoose(el) && allowClick(el, false)) return [el];
             }
             return [];
         }
