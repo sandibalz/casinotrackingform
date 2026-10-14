@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.10.4
+// @version      1.10.5
 // @description  On RealPrize and LoneStar Casino: clicks daily/grand prize COLLECT and any button whose text says collect / claim / free spins (incl. image-based Claim Now popups, CLAIM PRIZE, SPIN & WIN), and closes popups that show a price (e.g. 4.99, 19.99)
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -96,6 +96,7 @@
 //           text matching started clicking random things. On realprize.com ONLY (NEW_RP) the script now: never closes price popups,
 //           skips the image-popup path and the CLAIM PRIZE / SPIN & WIN launch scan, and clicks only an element whose whole text is
 //           Claim/Collect (+Now/Reward/Bonus/Prize) INSIDE a popup. Everything else is just logged (SEEN). LoneStar unchanged.
+// v1.10.5 – the on-page log is now a collapsed bottom-left pill (like Popup Closer's, in a shared #tm-badge-stack); click it to open the log, click again to collapse. Copy kept; the x is gone.
 // v1.10.2 – SEEN log: records the text of every popup that appears (once per page load), even if the script does nothing with it.
 // v1.10.1 – fixed top/bottom bars and pointer-events:none layers no longer count as popups (nav Free Spins button was still clicked).
 // v1.10.0 – run log + overlay like Punt/Chanced: every click / popup close / site reply is stored per owner in Tampermonkey
@@ -162,7 +163,7 @@
     const ERROR_RE   = /error|invalid|already|expired|not valid|failed/i;
     const NOISY_LOG_RE = /^(Launch scan:|Launch-window button scan)/;   // console only, not stored
     const runLog = [];            // this page run only, shown in the overlay
-    let overlayEl = null, overlayBody = null;
+    let overlayEl = null, overlayBody = null, overlayBox = null, overlayPill = null, overlayOpen = false;
 
     function getOwner(forcePrompt) {
         let owner = '';
@@ -191,34 +192,47 @@
     }
     function ensureOverlay() {
         if (!IS_TOP || overlayEl || !document.body) return;
+        // v1.10.5: collapsed pill (like Popup Closer's) in a shared bottom-left stack; click to open the log, click again to collapse.
+        let stack = document.getElementById('tm-badge-stack');
+        if (!stack) {
+            stack = document.createElement('div');
+            stack.id = 'tm-badge-stack';
+            stack.style.cssText = 'position:fixed;left:12px;bottom:168px;z-index:2147483646;display:flex;flex-direction:column-reverse;align-items:flex-start;gap:2px;pointer-events:none;';
+            document.body.appendChild(stack);
+        }
         overlayEl = document.createElement('div');
         overlayEl.id = 'realprize-autoclaim-overlay';
-        overlayEl.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:2147483647;width:340px;max-height:220px;background:#111;color:#eee;font:12px/1.4 monospace;border:1px solid #555;border-radius:6px;box-shadow:0 2px 10px #000a;display:flex;flex-direction:column;';
+        overlayEl.style.cssText = 'display:flex;flex-direction:column;align-items:flex-start;gap:2px;pointer-events:none;';
+        const box = document.createElement('div');
+        box.style.cssText = 'display:none;width:340px;max-height:220px;background:#111;color:#eee;font:12px/1.4 monospace;border:1px solid #555;border-radius:6px;box-shadow:0 2px 10px #000a;flex-direction:column;pointer-events:auto;';
         const bar = document.createElement('div');
         bar.style.cssText = 'display:flex;justify-content:space-between;padding:4px 8px;background:#222;border-radius:6px 6px 0 0;';
         const title = document.createElement('span');
         title.textContent = SITE + ' AutoClaim - ' + getOwner();
-        const btns = document.createElement('span');
         const copy = document.createElement('button');
         copy.textContent = 'Copy';
-        copy.style.cssText = 'margin-right:6px;cursor:pointer;';
+        copy.style.cssText = 'cursor:pointer;';
         copy.onclick = () => { try { navigator.clipboard.writeText(runLog.map(fmtEntry).join('\n')); } catch (e) {} };
-        const close = document.createElement('button');
-        close.textContent = 'x';
-        close.style.cssText = 'cursor:pointer;';
-        close.onclick = () => { overlayEl.remove(); overlayEl = null; overlayBody = null; };
-        btns.append(copy, close);
-        bar.append(title, btns);
+        bar.append(title, copy);
         overlayBody = document.createElement('div');
         overlayBody.style.cssText = 'padding:6px 8px;overflow:auto;white-space:pre-wrap;';
-        overlayEl.append(bar, overlayBody);
-        document.body.appendChild(overlayEl);
+        box.append(bar, overlayBody);
+        overlayPill = document.createElement('div');
+        overlayPill.style.cssText = 'background:#111;color:#9f9;font:11px/1.4 sans-serif;padding:4px 8px;border-radius:6px;opacity:.85;cursor:pointer;pointer-events:auto;';
+        overlayPill.onclick = () => { overlayOpen = !overlayOpen; renderOverlay(); };
+        overlayBox = box;
+        overlayEl.append(box, overlayPill);
+        stack.appendChild(overlayEl);
     }
     function renderOverlay() {
         ensureOverlay();
         if (overlayBody) {
             overlayBody.textContent = runLog.map(fmtEntry).join('\n');
-            overlayBody.scrollTop = overlayBody.scrollHeight;
+            overlayBox.style.display = overlayOpen ? 'flex' : 'none';
+            const warns = runLog.filter(e => ERROR_RE.test(e.detail || '') || /error/i.test(e.event || '')).length;
+            overlayPill.textContent = '\u2713 ' + SITE + ' AutoClaim: ' + runLog.length + ' events' + (warns ? ' (' + warns + ' warn)' : '') + (overlayOpen ? '' : ' \u25B8');
+            overlayPill.style.color = warns ? '#ff8a80' : '#9f9';
+            if (overlayOpen) overlayBody.scrollTop = overlayBody.scrollHeight;
         }
     }
     function showHistory() {
@@ -226,6 +240,7 @@
         try { hist = GM_getValue('claimLog_' + getOwner(), []); } catch (_) {}
         runLog.length = 0;
         hist.slice(-40).forEach(e => runLog.push(e));
+        overlayOpen = true;
         renderOverlay();
     }
     try {
@@ -236,7 +251,7 @@
     // Page text excluding our own overlay (so the overlay's words never count as a site message).
     function pageLines() {
         if (!document.body) return [];
-        return Array.from(document.body.children).filter(c => c !== overlayEl)
+        return Array.from(document.body.children).filter(c => c.id !== 'tm-badge-stack')
             .map(c => c.innerText || '').join('\n').split('\n').map(x => x.trim()).filter(Boolean);
     }
     // After a claim click, record the site's reply (toast / popup text) if one shows up.
@@ -379,7 +394,7 @@
     }
     // generic = broad text match (strict guards); false = specific popup paths (only the price/loop guards)
     // v1.9.1: elements that belong to the Collector-App extension UI must never be clicked
-    const COLLECTOR_UI_SEL = '#realprize-autoclaim-overlay, #collector-app-overlay-root, #collector-app-debug-log, #__collector_log_panel';
+    const COLLECTOR_UI_SEL = '#tm-badge-stack, #realprize-autoclaim-overlay, #collector-app-overlay-root, #collector-app-debug-log, #__collector_log_panel';
     function inCollectorUi(el) {
         let n = el;
         for (let i = 0; i < 12 && n; i++) {
