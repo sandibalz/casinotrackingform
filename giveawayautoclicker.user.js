@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Multi-Site Giveaway Auto-Clicker
 // @namespace http://tampermonkey.net/
-// @version 1.10.0
+// @version 1.10.1
 // @description Automatically clicks giveaway buttons — now relentlessly clicks until "Subscribed" on Playfame group
 // @author Anonymous
 // @match https://*.playfame.com/*
@@ -26,19 +26,60 @@
 //           PlayFame group and stake.us logic are untouched.
 (function() {
     'use strict';
+    // ---- badge (10/14/26): collapsed bottom-left pill with a log; click to open/close. Same look as Popup Closer's. ----
+    const BADGE_NAME = 'Giveaway Auto-Clicker', BADGE_VER = '1.10.1';
+    const badgeLines = []; let badgeOpen = false, badgePill = null, badgeBox = null, badgeWarn = 0;
+    function badgeRender() {
+        try {
+            if (window.top !== window.self || !document.body) return;
+            if (!badgePill || !badgePill.isConnected) {
+                let stack = document.getElementById('tm-badge-stack');
+                if (!stack) {
+                    stack = document.createElement('div'); stack.id = 'tm-badge-stack';
+                    stack.style.cssText = 'position:fixed;left:12px;bottom:168px;z-index:2147483646;display:flex;flex-direction:column-reverse;align-items:flex-start;gap:2px;pointer-events:none;';
+                    document.body.appendChild(stack);
+                }
+                const wrap = document.createElement('div');
+                wrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-start;gap:2px;pointer-events:none;';
+                badgeBox = document.createElement('div');
+                badgeBox.style.cssText = 'display:none;width:320px;max-height:200px;overflow:auto;background:#111;color:#eee;font:11px/1.4 monospace;border:1px solid #555;border-radius:6px;padding:6px 8px;white-space:pre-wrap;box-shadow:0 2px 10px #000a;pointer-events:auto;';
+                badgePill = document.createElement('div');
+                badgePill.style.cssText = 'background:#111;color:#9f9;font:11px/1.4 sans-serif;padding:4px 8px;border-radius:6px;opacity:.85;cursor:pointer;pointer-events:auto;';
+                badgePill.addEventListener('click', () => { badgeOpen = !badgeOpen; badgeRender(); });
+                wrap.append(badgeBox, badgePill); stack.appendChild(wrap);
+            }
+            badgeBox.style.display = badgeOpen ? 'block' : 'none';
+            if (badgeOpen) { badgeBox.textContent = badgeLines.length ? badgeLines.join('\n') : '(nothing yet)'; badgeBox.scrollTop = badgeBox.scrollHeight; }
+            badgePill.textContent = '✓ ' + BADGE_NAME + ' v' + BADGE_VER + ': ' + badgeLines.length + ' events' + (badgeWarn ? ' (' + badgeWarn + ' warn)' : '') + (badgeOpen ? '' : ' ▸');
+            badgePill.style.color = badgeWarn ? '#ff8a80' : '#9f9';
+        } catch (e) {}
+    }
+    function badgeAdd(text, warn) {
+        badgeLines.push(new Date().toLocaleTimeString() + ' ' + text);
+        if (badgeLines.length > 60) badgeLines.shift();
+        if (warn || /error|fail|abort|giving up|can't|cannot/i.test(text)) badgeWarn++;
+        badgeRender();
+    }
+    // console.log that also lands in the pill (element arguments are shown as <tag>)
+    function badgeLog(...args) {
+        console.log(...args);
+        badgeAdd(args.map((a) => (a && a.nodeType === 1) ? '<' + a.tagName.toLowerCase() + '>' : String(a)).join(' ').replace(/^\[[^\]]*\]\s*/, ''));
+    }
+    badgeRender();
+
     class GiveawayAutomation {
         constructor() {
             this.hostname = window.location.hostname.toLowerCase();
             this.maxWaitTime = 30000;
             this.countdownInterval = null;
             this.persistentInterval = null;  // For Playfame group retry loop
-            console.log("[GiveawayAutomation] Initialized for hostname:", this.hostname);
+            badgeLog("[GiveawayAutomation] Initialized for hostname:", this.hostname);
             this.init();
         }
 
         init() {
             if (sessionStorage.getItem('giveawayAborted')) {
-                console.log("[GiveawayAutomation] ABORTED STATE DETECTED: Skipping automation");
+                badgeLog("[GiveawayAutomation] ABORTED STATE DETECTED: Skipping automation");
                 return;
             }
 
@@ -50,7 +91,7 @@
         }
 
         async handlePage() {
-            console.log("[GiveawayAutomation] Processing page:", window.location.href);
+            badgeLog("[GiveawayAutomation] Processing page:", window.location.href);
 
             if (this.hostname.includes('playfame.com') || this.hostname.includes('mcluck.com') ||
                 this.hostname.includes('hellomillions.com') || this.hostname.includes('spinblitz.com')||
@@ -66,21 +107,21 @@
         // PERSISTENT PLAYFAME GROUP – KEEPS TRYING UNTIL SUBSCRIBED
         // ──────────────────────────────────────────────────────────────
         async handlePlayfameGroup_Persistent() {
-            console.log("[GiveawayAutomation] Starting PERSISTENT mode for Playfame group (will retry until Subscribed)");
+            badgeLog("[GiveawayAutomation] Starting PERSISTENT mode for Playfame group (will retry until Subscribed)");
 
             const maxTotalTime = 300000; // 5 minutes max
             const startTime = Date.now();
 
             this.persistentInterval = setInterval(() => {
                 if (Date.now() - startTime > maxTotalTime) {
-                    console.log("[GiveawayAutomation] 5-minute timeout reached — giving up");
+                    badgeLog("[GiveawayAutomation] 5-minute timeout reached — giving up");
                     clearInterval(this.persistentInterval);
                     return;
                 }
 
                 // Success check: "Subscribed" button (disabled)
                 if (this.isSubscribed()) {
-                    console.log("[GiveawayAutomation] SUCCESS: SUBSCRIBED STATE DETECTED!");
+                    badgeLog("[GiveawayAutomation] SUCCESS: SUBSCRIBED STATE DETECTED!");
                     clearInterval(this.persistentInterval);
                     this.createCountdownPopup();
                     this.startCountdown();
@@ -90,7 +131,7 @@
                 // Find and click "Enter Giveaway" if it's clickable
                 const button = this.findEnterGiveawayButton();
                 if (button && !button.disabled && button.getAttribute('data-disabled') !== 'true' && this.isElementVisible(button)) {
-                    console.log("[GiveawayAutomation] Clicking Enter Giveaway →", button.textContent.trim());
+                    badgeLog("[GiveawayAutomation] Clicking Enter Giveaway →", button.textContent.trim());
                     button.click();
                 }
             }, 3000); // Check every 3 seconds
@@ -169,12 +210,12 @@
                 const popup = document.getElementById('giveaway-automation-popup');
                 if (popup) popup.remove();
                 sessionStorage.setItem('giveawayAborted', 'true');
-                console.log("[GiveawayAutomation] Tab close aborted by user");
+                badgeLog("[GiveawayAutomation] Tab close aborted by user");
             });
         }
 
         async handleStake() {
-            console.log("[GiveawayAutomation] Handling Stake.us logic");
+            badgeLog("[GiveawayAutomation] Handling Stake.us logic");
             try {
                 const buttonSelectors = [
                     'button[data-testid*="giveaway-enter" i]',
@@ -186,7 +227,7 @@
                 for (const selector of buttonSelectors) {
                     button = await this.waitForElement(selector, this.maxWaitTime);
                     if (button && button.textContent.toLowerCase().includes('enter giveaway') && !button.disabled && this.isElementVisible(button)) {
-                        console.log("[GiveawayAutomation] Found Stake.us button:", button.textContent.trim());
+                        badgeLog("[GiveawayAutomation] Found Stake.us button:", button.textContent.trim());
                         break;
                     }
                 }
@@ -201,7 +242,7 @@
                 }
                 if (button) {
                     button.click();
-                    console.log("[GiveawayAutomation] Clicked Stake.us giveaway button");
+                    badgeLog("[GiveawayAutomation] Clicked Stake.us giveaway button");
                     this.createCountdownPopup();
                     this.startCountdown();
                 }
