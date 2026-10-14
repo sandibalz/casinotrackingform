@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Facebook Contest Comment Helper
 // @namespace    http://tampermonkey.net/
-// @version      1.0.2
+// @version      1.1.0
 // @description  Facebook "comment your answer" contests (ONLY on posts by pages listed in POSTERS): reads the comments, finds the most common answer (only among comments using the hashtag IF the caption asks for one), and types it into the comment box. NEVER clicks Post - you review it and post it yourself.
 // @match        https://www.facebook.com/*
 // @noframes
@@ -261,7 +261,6 @@
       const fillIt = opts.fill ?? AUTO_FILL;
       if (!fillIt) { res.status = 'Scan only (fill off).'; return res; }
       if (!opts.force) {
-        if (tie) { res.status = 'Tie for first place - not filled. Pick one yourself.'; return res; }
         if (top.count < MIN_VOTES) { res.status = 'Only ' + top.count + ' vote(s) so far - not filled.'; return res; }
         if (wasFilled()) { res.status = 'Already filled once for this post.'; return res; }
       }
@@ -269,7 +268,7 @@
       if (await fillBox(box, res.pick)) {
         markFilled();
         res.filled = true;
-        res.status = 'Typed into the box. Review it, then click Post yourself.';
+        res.status = tie ? 'TIE for first place - typed one of them. Check it and edit if needed, then click Post yourself.' : 'Typed into the box. Review it, then click Post yourself.';
       } else {
         res.status = 'Could not type into the box.';
       }
