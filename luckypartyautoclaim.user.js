@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LuckyParty Auto Claim Now
 // @namespace    https://luckparty.com/
-// @version      1.3.1
+// @version      1.3.2
 // @description  Closes any popups (including iframe-embedded ones) blocking the way, then finds <div class="button-content">Claim Now</div> on luckparty.com and clicks the Claim Now button. Leaves the Coin Store dialog alone, and leaves any popup with its own unclaimed "Claim Now" button alone too (so it gets claimed, not closed).
 // @match        https://luckparty.com/*
 // @run-at       document-idle
@@ -14,7 +14,7 @@
     'use strict';
 
     // ---- badge (10/14/26): collapsed bottom-left pill with a log; click to open/close. Same look as Popup Closer's. ----
-    const BADGE_NAME = 'LuckyParty Auto Claim', BADGE_VER = '1.3.1';
+    const BADGE_NAME = 'LuckyParty Auto Claim', BADGE_VER = '1.3.2';
     const badgeLines = []; let badgeOpen = false, badgePill = null, badgeBox = null, badgeWarn = 0;
     function badgeRender() {
         try {
@@ -111,7 +111,8 @@
     function isCoinStoreDialog(target) {
         let node = target;
         for (let i = 0; i < 12 && node; i++) {
-            if (node.querySelector && node.querySelector('[data-sentry-source-file="FreeCoinsDialog.tsx"]')) return true;
+            // 10/15/26: the site dropped the FreeCoinsDialog.tsx marker (store was being closed the moment it opened) - the store now renders FreeReward.tsx / StoreItem.tsx, so match those and the free-reward markup too.
+            if (node.querySelector && node.querySelector('[data-sentry-source-file="FreeCoinsDialog.tsx"], [data-sentry-source-file="FreeReward.tsx"], [data-sentry-source-file="StoreItem.tsx"], .free-rewards, .free-reward__button')) return true;
             node = node.parentElement;
         }
         return false;
