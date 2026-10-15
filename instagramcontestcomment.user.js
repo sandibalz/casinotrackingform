@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Instagram Contest Comment Helper
 // @namespace    http://tampermonkey.net/
-// @version      1.4.3
+// @version      1.4.4
 // @description  Instagram "comment your answer + #tag" contests (ONLY on posts by usernames listed in POSTERS): reads the comments, finds the most common answer among comments that carry the post's hashtag, and types that comment into the comment box. NEVER clicks Post - you review it and post it yourself.
 // @match        https://www.instagram.com/*
 // @run-at       document-idle
@@ -213,18 +213,23 @@
   const boxText = b => ('value' in b ? b.value : b.textContent) || '';
 
   async function fillBox(box, text) {
-    box.focus();
-    if (box.tagName === 'TEXTAREA' || box.tagName === 'INPUT') {
-      const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(box), 'value').set;
-      setter.call(box, text);
-      box.dispatchEvent(new Event('input', { bubbles: true }));
-    } else {
-      document.execCommand('selectAll', false);
-      document.execCommand('insertText', false, text);
+    for (let i = 0; i < 3; i++) {
+      await sleep(i ? 800 : 600); // let Instagram finish rendering the box; retry if the first try didn't stick
+      const b = (i && findBox()) || box;
+      b.focus();
+      if (b.tagName === 'TEXTAREA' || b.tagName === 'INPUT') {
+        const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(b), 'value').set;
+        setter.call(b, text);
+        b.dispatchEvent(new Event('input', { bubbles: true }));
+      } else {
+        document.execCommand('selectAll', false);
+        document.execCommand('insertText', false, text);
+      }
+      await sleep(400); // Instagram re-renders the box after input; re-find it before checking
+      const now = findBox();
+      if (boxText(b).includes(text) || (!!now && boxText(now).includes(text))) return true;
     }
-    await sleep(400); // Instagram re-renders the box after input; re-find it before checking
-    const now = findBox();
-    return boxText(box).includes(text) || (!!now && boxText(now).includes(text));
+    return false;
   }
 
   const guardKey = () => 'igch_filled_' + shortcode();
