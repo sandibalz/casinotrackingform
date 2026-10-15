@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Instagram Contest Comment Helper
 // @namespace    http://tampermonkey.net/
-// @version      1.4.4
+// @version      1.4.5
 // @description  Instagram "comment your answer + #tag" contests (ONLY on posts by usernames listed in POSTERS): reads the comments, finds the most common answer among comments that carry the post's hashtag, and types that comment into the comment box. NEVER clicks Post - you review it and post it yourself.
 // @match        https://www.instagram.com/*
 // @run-at       document-idle
@@ -263,23 +263,23 @@
       let crowdTag = '', best = 0;
       for (const t of caps.keys()) { const n = useCount(t); if (n > best) { best = n; crowdTag = t; } }
       if (!reqTag) reqTag = crowdTag;
-      if (!reqTag) {
-        res.status = caps.size ? 'No comment uses a caption hashtag yet.' : 'No hashtag found in the caption.';
-        return res;
-      }
-      res.tag = caps.get(reqTag) || reqTag;
-      res.tagFrom = TAG_OVERRIDE ? 'override' : asked.length ? 'caption instruction' : 'most used by commenters';
+      if (!reqTag && !caps.size) { res.status = 'No hashtag found in the caption.'; return res; }
+      // The caption has hashtags but doesn't ask for one and no commenter uses any: no hashtag required, count every comment.
+      const noTag = !reqTag;
+      res.tag = noTag ? '' : (caps.get(reqTag) || reqTag);
+      res.tagFrom = noTag ? 'none required' : TAG_OVERRIDE ? 'override' : asked.length ? 'caption instruction' : 'most used by commenters';
       if (asked.length && crowdTag && crowdTag !== reqTag) {
         res.note = 'Commenters mostly used ' + (caps.get(crowdTag) || crowdTag) + ' - the post asks for ' + res.tag + '.';
       }
 
-      const tagged = comments.filter(c => c.tags.includes(reqTag) && c.answer);
+      const tagged = comments.filter(c => c.answer && (noTag || c.tags.includes(reqTag)));
       res.tagged = tagged.length;
       const groups = new Map();
       for (const c of tagged) {
         const g = groups.get(c.answer) || { count: 0, raws: new Map() };
         g.count++;
-        g.raws.set(c.text, (g.raws.get(c.text) || 0) + 1);
+        const raw = noTag ? (c.text.replace(TAG_RE, ' ').replace(/\s+/g, ' ').trim() || c.text) : c.text;
+        g.raws.set(raw, (g.raws.get(raw) || 0) + 1);
         groups.set(c.answer, g);
       }
       const sorted = [...groups.entries()].sort((a, b) => b[1].count - a[1].count);
@@ -288,7 +288,7 @@
 
       const [, top] = sorted[0];
       const tie = sorted[1] && sorted[1][1].count === top.count;
-      const hasCap = s => (s.includes(res.tag) ? 1 : 0);
+      const hasCap = s => (res.tag && s.includes(res.tag) ? 1 : 0);
       res.pick = [...top.raws.entries()].sort((a, b) => (hasCap(b[0]) - hasCap(a[0])) || (b[1] - a[1]))[0][0];
 
       const fillIt = opts.fill ?? AUTO_FILL;
@@ -336,7 +336,7 @@
     head.appendChild(x);
     b.appendChild(head);
 
-    if (res.tag) b.appendChild(el('div', 'Tag: ' + res.tag + ' (' + res.tagFrom + ') · ' + res.tagged + ' of ' + res.total + ' comments'));
+    if (res.tag || res.tagFrom) b.appendChild(el('div', 'Tag: ' + (res.tag || 'none required') + ' (' + res.tagFrom + ') · ' + res.tagged + ' of ' + res.total + ' comments'));
     if (res.note) b.appendChild(el('div', res.note, 'margin-top:4px;color:#f0c36d'));
     if (res.tally.length) b.appendChild(el('div', 'Votes: ' + res.tally.map(([a, n]) => (a || '?').toUpperCase() + ' ' + n).join(' · ')));
     if (res.pick) b.appendChild(el('div', 'Pick: ' + res.pick, 'margin-top:4px;font-weight:600'));
