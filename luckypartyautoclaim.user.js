@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LuckyParty Auto Claim Now
 // @namespace    https://luckparty.com/
-// @version      1.3.2
+// @version      1.3.3
 // @description  Closes any popups (including iframe-embedded ones) blocking the way, then finds <div class="button-content">Claim Now</div> on luckparty.com and clicks the Claim Now button. Leaves the Coin Store dialog alone, and leaves any popup with its own unclaimed "Claim Now" button alone too (so it gets claimed, not closed).
 // @match        https://luckparty.com/*
 // @run-at       document-idle
@@ -14,7 +14,7 @@
     'use strict';
 
     // ---- badge (10/14/26): collapsed bottom-left pill with a log; click to open/close. Same look as Popup Closer's. ----
-    const BADGE_NAME = 'LuckyParty Auto Claim', BADGE_VER = '1.3.2';
+    const BADGE_NAME = 'LuckyParty Auto Claim', BADGE_VER = '1.3.3';
     const badgeLines = []; let badgeOpen = false, badgePill = null, badgeBox = null, badgeWarn = 0;
     function badgeRender() {
         try {
@@ -57,6 +57,7 @@
     // Elements we've already clicked, so we don't spam-click the same button.
     const clicked = new WeakSet();
     const closedPopups = new WeakSet();
+    let crossOriginNoted = false;
 
     // ---- Popup closing (including same-origin iframe popups) -----------------
     // luckparty.com's popups render their close button as an <img class=
@@ -160,7 +161,8 @@
 
     function closePopups() {
         const { found, blockedFrameCount } = findPopupCloseIcons();
-        if (blockedFrameCount > 0) {
+        if (blockedFrameCount > 0 && !crossOriginNoted) {
+            crossOriginNoted = true; // 10/15/26: log once - logging every pass updated the badge, which re-triggered the observer (page froze)
             badgeLog(`[Auto Claim Now] ${blockedFrameCount} cross-origin iframe(s) present — can't check those for popups.`);
         }
         for (const iconEl of found) {
@@ -218,7 +220,17 @@
     // Note: this only observes the top document — a mutation purely inside an
     // iframe's own document won't trigger it, which is what the interval poll
     // below is for.
-    const observer = new MutationObserver(() => scan());
+    // 10/15/26: ignore the badge's own DOM updates (they re-triggered this observer in a loop and froze the page) and debounce the rest.
+    let scanTimer = null;
+    const observer = new MutationObserver((muts) => {
+        const onlyBadge = muts.every((m) => {
+            const t = m.target && (m.target.nodeType === 1 ? m.target : m.target.parentElement);
+            return t && t.closest && t.closest('#tm-badge-stack');
+        });
+        if (onlyBadge) return;
+        if (scanTimer) return;
+        scanTimer = setTimeout(() => { scanTimer = null; scan(); }, 200);
+    });
     observer.observe(document.documentElement, { childList: true, subtree: true });
 
     // Safety-net poll in case a mutation slips through (or happens inside an iframe).
