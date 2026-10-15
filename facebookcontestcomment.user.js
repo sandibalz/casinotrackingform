@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Facebook Contest Comment Helper
 // @namespace    http://tampermonkey.net/
-// @version      1.1.5
+// @version      1.1.6
 // @description  Facebook "comment your answer" contests (ONLY on posts by pages listed in POSTERS): reads the comments, finds the most common answer (only among comments using the hashtag IF the caption asks for one), and types it into the comment box. NEVER clicks Post - you review it and post it yourself.
 // @match        https://www.facebook.com/*
 // @noframes
@@ -79,7 +79,7 @@
     let text = '';
     for (let n = w.nextNode(); n; n = w.nextNode()) {
       const s = n.nodeValue;
-      if (!s || !s.trim() || skip(n) || NOISE.has(s.trim())) continue;
+      if (!s || !s.trim() || skip(n) || NOISE.has(s.trim()) || /^(liked |replied |reply )?by (the )?author$/i.test(s.trim())) continue;
       text += (text ? ' ' : '') + s;
     }
     return { user, text: text.replace(/\s+/g, ' ').trim() };
@@ -200,12 +200,17 @@
   const boxText = b => ('value' in b ? b.value : b.textContent) || '';
 
   async function fillBox(box, text) {
-    box.focus();
-    document.execCommand('selectAll', false);
-    document.execCommand('insertText', false, text);
-    await sleep(400); // Facebook re-renders the box after input; re-find it before checking
-    const now = findBox();
-    return boxText(box).includes(text) || (!!now && boxText(now).includes(text));
+    for (let i = 0; i < 3; i++) {
+      await sleep(i ? 800 : 600); // let Facebook finish rendering the box; retry if the first try didn't stick
+      const b = (i && findBox()) || box;
+      b.focus();
+      document.execCommand('selectAll', false);
+      document.execCommand('insertText', false, text);
+      await sleep(400); // Facebook re-renders the box after input; re-find it before checking
+      const now = findBox();
+      if (boxText(b).includes(text) || (!!now && boxText(now).includes(text))) return true;
+    }
+    return false;
   }
 
   const guardKey = () => 'fbch_filled_' + navKey();
