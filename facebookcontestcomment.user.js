@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Facebook Contest Comment Helper
 // @namespace    http://tampermonkey.net/
-// @version      1.1.9
+// @version      1.1.10
 // @description  Facebook "comment your answer" contests (ONLY on posts by pages listed in POSTERS): reads the comments, finds the most common answer (only among comments using the hashtag IF the caption asks for one), and types it into the comment box. NEVER clicks Post - you review it and post it yourself.
 // @match        https://www.facebook.com/*
 // @noframes
@@ -28,7 +28,7 @@
   const TAG_OVERRIDE = '';      // e.g. '#hellomillions' to force a required hashtag
   const LOG = '[FB Contest]';
   // The script does NOTHING on a post unless its page is listed here (the page's URL name: facebook.com/<name>).
-  const POSTERS = ['hellomillions', 'mcluckdotcom', 'spinblitz.official', 'pulszdotcom', 'playfame.official', 'spreecasino', 'americanluck', 'wowvegascom', 'playmodocasino', 'rollacasino', 'sara.danaher'];
+  const POSTERS = ['hellomillions', 'mcluckdotcom', 'spinblitz.official', 'pulszdotcom', 'playfame.official', 'spreecasino', 'americanluck', 'wowvegascom', 'playmodocasino', 'rollacasino', 'sara.danaher', 'crownrips'];
   const norm = p => String(p || '').trim().toLowerCase().replace(/^@/, '');
   const BUILTIN = new Set(POSTERS.map(norm)); // the shared list; the Tampermonkey menu adds to it via GitHub
   const RESERVED = new Set(['photo', 'photos', 'watch', 'reel', 'reels', 'groups', 'hashtag', 'marketplace', 'gaming', 'events', 'pages',
