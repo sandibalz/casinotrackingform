@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CoinsBack Auto Redeem Promo Code
 // @namespace    https://www.coinsbackcasino.com/
-// @version      1.1.0
+// @version      1.2.0
 // @description  On CoinsBack's Promo Codes page, once the CapSolver extension reports "Captcha solved!" and the code box is filled (e.g. from ?code=), clicks Redeem once per code, logs what the site shows, then clicks "Maybe later" on the "Bonus claimed!" popup.
 // @match        https://www.coinsbackcasino.com/account/promo-codes*
 // @match        https://coinsbackcasino.com/account/promo-codes*
@@ -15,7 +15,7 @@
     'use strict';
 
     // ---- badge: collapsed bottom-left pill with a log; click to open/close (same look as Zula / Yay Auto Claim). ----
-    const BADGE_NAME = 'CoinsBack Auto Redeem', BADGE_VER = '1.1.0';
+    const BADGE_NAME = 'CoinsBack Auto Redeem', BADGE_VER = '1.2.0';
     const badgeLines = []; let badgeOpen = false, badgePill = null, badgeBox = null, badgeWarn = 0;
     function badgeRender() {
         try {
@@ -114,9 +114,26 @@
 
     // After the click, record every new toast text for a few seconds. RESULT-* lines are classified from the text;
     // anything unrecognised is logged as RESULT-TEXT so the real wording can be seen and matched later.
+    // The site also shows the result as a persistent INLINE message under the code box (seen live 10/16/26):
+    // <p class="mt-3 text-sm text-amber-400">You already claimed this one.  (Oct 16, 10:04 AM)</p> inside the promo <section> card,
+    // outside the <form>. Coloured text-* class: amber = already/warning (red/rose = error, green/emerald = success are assumed, not yet seen).
+    function inlineMessages() {
+        const out = [];
+        const input = document.querySelector('input[placeholder="Enter promo code"]');
+        const card = input && (input.closest('section') || input.closest('form') && input.closest('form').parentElement);
+        if (!card) return out;
+        card.querySelectorAll('p').forEach((p) => {
+            if (p.closest('form') || !isVisible(p)) return;
+            if (!/\btext-(amber|yellow|orange|red|rose|green|emerald)-/.test(String(p.className))) return;
+            const t = (p.innerText || '').replace(/\s+/g, ' ').trim();
+            if (t && t.length < 200) out.push(t);
+        });
+        return out;
+    }
     function watchResult() {
         if (!resultWatch) return;
-        for (const t of toastTexts()) {
+        const texts = toastTexts().concat(inlineMessages());
+        for (const t of texts) {
             if (resultWatch.seen.has(t)) continue;
             resultWatch.seen.add(t);
             if (/already (been )?(claimed|redeemed|used)/i.test(t)) log('RESULT-ALREADY: ' + t.slice(0, 140));
@@ -125,7 +142,7 @@
             else log('RESULT-TEXT: ' + t.slice(0, 140));
         }
         if (Date.now() - resultWatch.t0 > RESULT_WAIT_MS) {
-            if (!resultWatch.seen.size) log('RESULT-NONE: no toast/alert text seen within ' + (RESULT_WAIT_MS / 1000) + ' s', true);
+            if (!resultWatch.seen.size) log('RESULT-NONE: no result text seen within ' + (RESULT_WAIT_MS / 1000) + ' s', true);
             resultWatch = null;
         }
     }
