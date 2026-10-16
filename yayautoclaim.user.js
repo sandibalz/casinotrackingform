@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yay Casino Auto Claim Now
 // @namespace    https://www.yaycasino.com/
-// @version      1.0.0
+// @version      1.1.0
 // @description  Clicks the Claim Now button on Yay Casino's special-offer / gift popups as soon as they appear. Never touches popups that show a price.
 // @match        https://www.yaycasino.com/*
 // @match        https://yaycasino.com/*
@@ -15,7 +15,7 @@
     'use strict';
 
     // ---- badge: collapsed bottom-left pill with a log; click to open/close (same look as Zula Auto Claim). ----
-    const BADGE_NAME = 'Yay Auto Claim', BADGE_VER = '1.0.0';
+    const BADGE_NAME = 'Yay Auto Claim', BADGE_VER = '1.1.0';
     const badgeLines = []; let badgeOpen = false, badgePill = null, badgeBox = null, badgeWarn = 0;
     function badgeRender() {
         try {
@@ -93,13 +93,29 @@
         return null;
     }
 
+    // After a click, read the site's result dialog (seen live 10/16/26: "Free Reward Claimed / You've successfully claimed your free reward!")
+    // and log RESULT-SUCCESS / RESULT-ERROR, or RESULT-NONE if nothing shows within 8 s.
+    let awaiting = 0;
+    function checkResult() {
+        if (!awaiting) return;
+        const txt = Array.from(document.querySelectorAll('.app-dialog-container')).map((d) => d.innerText || '').join(' | ').replace(/\s+/g, ' ');
+        if (/successfully claimed|reward claimed/i.test(txt)) {
+            awaiting = 0; log('RESULT-SUCCESS: ' + txt.slice(0, 120));
+        } else if (/error|try again|already claimed|expired|unable|failed|something went wrong/i.test(txt) && !/claim now/i.test(txt)) {
+            awaiting = 0; log('RESULT-ERROR: ' + txt.slice(0, 120), true);
+        } else if (Date.now() - awaiting > 8000) {
+            awaiting = 0; log('RESULT-NONE: no result dialog within 8 s', true);
+        }
+    }
+
     function scan() {
+        checkResult();
         if (Date.now() - lastClick < COOLDOWN_MS) return;
         const btn = findClaimButton();
         if (!btn) return;
         lastClick = Date.now();
         log('clicking Claim Now');
-        try { robustClick(btn); } catch (e) { log('click error: ' + e.message); }
+        try { robustClick(btn); awaiting = Date.now(); } catch (e) { log('click error: ' + e.message); }
     }
 
     scan();
