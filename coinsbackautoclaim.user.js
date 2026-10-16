@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         CoinsBack Auto Redeem Promo Code
 // @namespace    https://www.coinsbackcasino.com/
-// @version      1.0.0
-// @description  On CoinsBack's Promo Codes page, once the CapSolver extension reports "Captcha solved!" and the code box is filled (e.g. from ?code=), clicks Redeem once per code and logs what the site shows.
+// @version      1.1.0
+// @description  On CoinsBack's Promo Codes page, once the CapSolver extension reports "Captcha solved!" and the code box is filled (e.g. from ?code=), clicks Redeem once per code, logs what the site shows, then clicks "Maybe later" on the "Bonus claimed!" popup.
 // @match        https://www.coinsbackcasino.com/account/promo-codes*
 // @match        https://coinsbackcasino.com/account/promo-codes*
 // @run-at       document-idle
@@ -15,7 +15,7 @@
     'use strict';
 
     // ---- badge: collapsed bottom-left pill with a log; click to open/close (same look as Zula / Yay Auto Claim). ----
-    const BADGE_NAME = 'CoinsBack Auto Redeem', BADGE_VER = '1.0.0';
+    const BADGE_NAME = 'CoinsBack Auto Redeem', BADGE_VER = '1.1.0';
     const badgeLines = []; let badgeOpen = false, badgePill = null, badgeBox = null, badgeWarn = 0;
     function badgeRender() {
         try {
@@ -103,9 +103,10 @@
         const sel = '[data-sonner-toast],[role="status"],[role="alert"],[class*="toast" i],[class*="Toastify" i],[class*="notification" i],[class*="snackbar" i]';
         const out = [];
         document.querySelectorAll(sel).forEach((e) => {
-            if (e.closest('#tm-badge-stack') || e.closest('#capsolver-solver-tip-button')) return;
+            if (e.closest('#tm-badge-stack') || e.closest('#capsolver-solver-tip-button') || e.closest('[role="dialog"]')) return;
             if (!isVisible(e)) return;
             const t = (e.innerText || '').replace(/\s+/g, ' ').trim();
+            if (t === (document.title || '').trim()) return;   // Next.js route announcer (role=alert span holding the page title)
             if (t && t.length < 300) out.push(t);
         });
         return out;
@@ -129,8 +130,28 @@
         }
     }
 
+    // After a successful redeem the site opens a dialog (seen live 10/16/26): "Bonus claimed! We just added 10 Free Rounds on <game>! ..."
+    // with buttons "Play <game>" (submit) and "Maybe later". Click ONLY "Maybe later" - never the Play button.
+    let lastPopupClick = 0;
+    function closeBonusPopup() {
+        if (Date.now() - lastPopupClick < 3000) return;
+        for (const d of document.querySelectorAll('[role="dialog"]')) {
+            if (d.getAttribute('data-state') === 'closed' || !isVisible(d)) continue;
+            const txt = (d.innerText || '').replace(/\s+/g, ' ').trim();
+            if (!/bonus claimed/i.test(txt)) continue;
+            const later = Array.from(d.querySelectorAll('button')).find((b) => /^\s*maybe later\s*$/i.test(b.textContent) && !b.disabled && isVisible(b));
+            if (!later) continue;
+            lastPopupClick = Date.now();
+            log('RESULT-POPUP: ' + txt.replace(/\s*(Play .*?)?\s*Maybe later\s*$/i, '').slice(0, 140));
+            log('clicking Maybe later');
+            try { robustClick(later); } catch (e) { log('click error: ' + e.message, true); }
+            return;
+        }
+    }
+
     function scan() {
         watchResult();
+        closeBonusPopup();
         const f = findForm();
         if (!f) return;
         const code = (f.input.value || '').trim();
