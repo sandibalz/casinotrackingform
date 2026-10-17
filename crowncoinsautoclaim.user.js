@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CrownCoins Auto Claim Freebie
 // @namespace    https://crowncoinscasino.com/
-// @version      1.0.1
+// @version      1.0.2
 // @description  Closes CrownCoins' random popups (sales/offers) until the free-reward popup with a Claim button appears, then clicks Claim. Never clicks anything showing a price.
 // @match        https://crowncoinscasino.com/*
 // @match        https://*.crowncoinscasino.com/*
@@ -14,7 +14,7 @@
 (function () {
     'use strict';
 
-    const NAME = 'CrownCoins Auto Claim', VER = '1.0.1';
+    const NAME = 'CrownCoins Auto Claim', VER = '1.0.2';
     const CLAIM_RE = /^\s*claim( now)?\s*$/i;
     const PRICE_RE = /\$\s*\d/;
     const CLAIM_COOLDOWN_MS = 3000;
@@ -77,9 +77,11 @@
         return s.display !== 'none' && s.visibility !== 'hidden' && s.pointerEvents !== 'none' && s.opacity !== '0';
     }
 
-    function robustClick(el) {
+    function robustClick(el) {   // (el is re-pointed at the innermost element under the click point)
         const r = el.getBoundingClientRect();
         const x = r.left + r.width / 2, y = r.top + r.height / 2;
+        const top = document.elementFromPoint(x, y);   // CrownCoins listens on the inner element (button__content), not the <button>
+        if (top && el.contains(top)) el = top;
         const base = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0, buttons: 1, detail: 1 };
         el.dispatchEvent(new PointerEvent('pointerdown', { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
         el.dispatchEvent(new MouseEvent('mousedown', base));
