@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         CrownCoins Auto Claim Freebie
 // @namespace    https://crowncoinscasino.com/
-// @version      1.0.2
+// @version      1.1.1
 // @description  Closes CrownCoins' random popups (sales/offers) until the free-reward popup with a Claim button appears, then clicks Claim. Never clicks anything showing a price.
 // @match        https://crowncoinscasino.com/*
 // @match        https://*.crowncoinscasino.com/*
 // @run-at       document-idle
-// @grant        none
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
 // @updateURL    https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/crowncoinsautoclaim.user.js
 // @downloadURL  https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/crowncoinsautoclaim.user.js
 // ==/UserScript==
@@ -14,7 +16,7 @@
 (function () {
     'use strict';
 
-    const NAME = 'CrownCoins Auto Claim', VER = '1.0.2';
+    const NAME = 'CrownCoins Auto Claim', VER = '1.1.1';
     const CLAIM_RE = /^\s*claim( now)?\s*$/i;
     const PRICE_RE = /\$\s*\d/;
     const CLAIM_COOLDOWN_MS = 3000;
@@ -59,9 +61,39 @@
             pill.style.color = warn ? '#ff8a80' : '#9f9';
         } catch (e) {}
     }
+    // v1.1.0: per-owner run log saved in Tampermonkey storage (same scheme as Punt/Chanced: claimLog_<owner>, last 300)
+    const SITE = 'CrownCoins', isTop = window.top === window.self;
+    function getOwner(forcePrompt) {
+        let owner = GM_getValue('owner', '');
+        if (isTop && (!owner || forcePrompt)) {
+            const a = prompt('Who is this browser for? (Ben, Cindy, Tyler, Jessica)', owner || '');
+            if (a && a.trim()) { owner = a.trim(); GM_setValue('owner', owner); }
+        }
+        return owner || 'Unknown';
+    }
+    function persist(msg) {
+        try {
+            const key = 'claimLog_' + getOwner();
+            let hist = GM_getValue(key, []);
+            const i = msg.indexOf(':'), ev = /^[A-Z-]+(:|$)/.test(msg) ? msg.split(':')[0] : 'info';
+            hist.push({ t: new Date().toISOString(), site: SITE, event: ev, detail: (isTop ? '' : '[frame] ') + msg });
+            if (hist.length > 300) hist = hist.slice(-300);
+            GM_setValue(key, hist);
+        } catch (e) {}
+    }
+    if (isTop) {
+        GM_registerMenuCommand('Show full claim log (' + SITE + ')', () => {
+            const hist = GM_getValue('claimLog_' + getOwner(), []);
+            lines.length = 0;
+            hist.slice(-40).forEach(e => lines.push(e.t.slice(11, 19) + ' ' + e.detail));
+            open = true; render();
+        });
+        GM_registerMenuCommand('Change owner', () => { getOwner(true); });
+    }
     function log(msg, isWarn) {
         const where = window.top === window.self ? '' : '[frame] ';
         console.log('[CrownCoins AutoClaim] ' + where + msg);
+        persist(msg);
         if (window.top !== window.self) return;   // frames log to console only
         lines.push(new Date().toLocaleTimeString() + ' ' + msg);
         if (lines.length > 60) lines.shift();
@@ -69,6 +101,7 @@
         render();
     }
     render();
+    log('script-loaded on ' + location.hostname);
 
     function isVisible(el) {
         const r = el.getBoundingClientRect();
@@ -82,7 +115,7 @@
         const x = r.left + r.width / 2, y = r.top + r.height / 2;
         const top = document.elementFromPoint(x, y);   // CrownCoins listens on the inner element (button__content), not the <button>
         if (top && el.contains(top)) el = top;
-        const base = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0, buttons: 1, detail: 1 };
+        const base = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: 1, detail: 1 };
         el.dispatchEvent(new PointerEvent('pointerdown', { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
         el.dispatchEvent(new MouseEvent('mousedown', base));
         el.dispatchEvent(new PointerEvent('pointerup', { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
@@ -134,6 +167,7 @@
     }
 
     function scan() {
+        render();   // re-attach the pill if the site's re-render wiped it
         checkResult();
         const now = Date.now();
 
