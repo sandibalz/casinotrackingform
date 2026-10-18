@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Popup Closer (per-site list)
 // @namespace    https://github.com/sandibalz/casinotrackingform
-// @version      1.6.32
+// @version      1.7.0
 // @description  Closes pop-ups you teach it (e.g. the "Add this web app to your device" bar) on the sites you add. Does nothing on a site that has no rule. Add rules from the Tampermonkey menu.
 // @match        *://*/*
 // @noframes
@@ -81,7 +81,7 @@
   const REPO = 'sandibalz/casinotrackingform', REPO_FILE = 'popupcloser.user.js', REPO_BRANCH = 'main', TOKEN_KEY = 'popupCloserGhToken';
   const unesc = (s) => String(s || '').replace(/\\(.)/g, '$1');
   const nh = (h) => String(h || '').replace(/^www\./, '').toLowerCase();
-  const ruleKey = (r) => nh(r.host) + '|' + unesc(r.text).toLowerCase();
+  const ruleKey = (r) => nh(r.host) + '|' + unesc(r.text).toLowerCase() + '|' + (r.sel || '');
   const q = (s) => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
   // Once an update that contains one of your local rules is installed, the local copy is redundant - drop it.
   (function prune() {
@@ -165,11 +165,11 @@
   }
   const addMutator = (rules) => (t) => {
     const b = ruleBlock(t); const have = new Set();
-    t.slice(b.s, b.e).split('\n').forEach((l) => { const m = l.match(/host:\s*'((?:[^'\\]|\\.)*)'.*?text:\s*'((?:[^'\\]|\\.)*)'/); if (m) have.add(nh(unesc(m[1])) + '|' + unesc(m[2]).toLowerCase()); });
+    t.slice(b.s, b.e).split('\n').forEach((l) => { const m = l.match(/host:\s*'((?:[^'\\]|\\.)*)'.*?text:\s*'((?:[^'\\]|\\.)*)'/); if (m) { const sm = l.match(/sel:\s*'((?:[^'\\]|\\.)*)'/); have.add(nh(unesc(m[1])) + '|' + unesc(m[2]).toLowerCase() + '|' + (sm ? sm[1].replace(/\\(.)/g, '$1') : '')); } });
     const add = rules.filter((r) => { const k = ruleKey(r); if (have.has(k)) return false; have.add(k); return true; });
     if (!add.length) return { nochange: 'already on GitHub' };
-    const lines = add.map((r) => '    { host: ' + q(nh(r.host)) + ', name: ' + q(r.name || '') + ', text: ' + q(unesc(r.text)) + ', close: ' + q(r.close || '') + ' },');
-    return { text: t.slice(0, b.e) + '\n' + lines.join('\n') + t.slice(b.e), summary: 'add ' + add.map((r) => nh(r.host) + ' "' + String(r.name || unesc(r.text)).slice(0, 30) + '"').join(', ') };
+    const lines = add.map((r) => '    { host: ' + q(nh(r.host)) + ', name: ' + q(r.name || '') + ', text: ' + q(unesc(r.text)) + ', close: ' + q(r.close || '') + (r.sel ? ', sel: ' + q(r.sel) : '') + ' },');
+    return { text: t.slice(0, b.e) + '\n' + lines.join('\n') + t.slice(b.e), summary: 'add ' + add.map((r) => nh(r.host) + ' "' + String(r.name || r.sel || unesc(r.text)).slice(0, 30) + '"').join(', ') };
   };
   const doneMsg = (res) => res.nochange ? 'Nothing to push: ' + res.nochange + '.' : 'Pushed to GitHub as v' + res.version + ' (' + res.summary + ').\nOther owners get it at their next update check. In this browser your local copy keeps working until the update is installed, then removes itself.';
 
@@ -212,18 +212,23 @@
   const ACTION_TXT = /^(add|get|buy|claim|collect|install|play|yes|ok|accept|allow|subscribe|spin|redeem|continue|opt in)/i;
   const squash = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
   function findPopup(rule) {
-    let re; try { re = new RegExp(rule.text, 'i'); } catch (e) { return null; }
-    const want = squash(rule.text.replace(/\\(.)/g, '$1'));
+    // 1.7.0: a rule with `sel` matches the popup by CSS selector (no text needed - for image-only popups)
+    const useSel = !!rule.sel;
+    let re = null, want = '';
+    if (!useSel) { try { re = new RegExp(rule.text, 'i'); } catch (e) { return null; } want = squash(rule.text.replace(/\\(.)/g, '$1')); }
+    let pool; try { pool = useSel ? document.querySelectorAll(rule.sel) : document.querySelectorAll('body *'); } catch (e) { return null; }
     const found = [];
-    for (const el of document.querySelectorAll('body *')) {
-      if (!isPositioned(el) || !visible(el)) continue;
-      if (el.id === 'popupcloser-toast' || el.id === 'popupcloser-pick' || el.id === 'popupcloser-log') continue;
-      const t = el.innerText || '';
-      if (t.length > 600) continue;
-      // also look at image alt text / file names (banner titles like "Daily Offer" are often a picture, not text)
-      const imgs = [...el.querySelectorAll('img')].map((i) => (i.alt || '') + ' ' + ((i.currentSrc || i.src || '').split('?')[0].split('/').pop())).join(' ');
-      const hay = t + ' ' + imgs;
-      if (!re.test(hay) && !(want.length >= 6 && squash(hay).indexOf(want) >= 0)) continue;
+    for (const el of pool) {
+      if ((!useSel && !isPositioned(el)) || !visible(el)) continue;
+      if (el.id === 'popupcloser-toast' || el.id === 'popupcloser-pick' || el.id === 'popupcloser-log' || el.closest('#popupcloser-inspect')) continue;
+      if (!useSel) {
+        const t = el.innerText || '';
+        if (t.length > 600) continue;
+        // also look at image alt text / file names (banner titles like "Daily Offer" are often a picture, not text)
+        const imgs = [...el.querySelectorAll('img')].map((i) => (i.alt || '') + ' ' + ((i.currentSrc || i.src || '').split('?')[0].split('/').pop())).join(' ');
+        const hay = t + ' ' + imgs;
+        if (!re.test(hay) && !(want.length >= 6 && squash(hay).indexOf(want) >= 0)) continue;
+      }
       const r = el.getBoundingClientRect();
       found.push({ el, area: r.width * r.height });
     }
@@ -286,7 +291,7 @@
   // ---- adding rules (Tampermonkey menu) ----
   function addRule(r) {
     const all = userRules(); all.push(r); sv(KEY, all);
-    const head = 'Saved: ' + r.host + ' -> "' + unesc(r.text) + '"\nReload the page to start it.\n\n';
+    const head = 'Saved: ' + r.host + ' -> ' + (r.sel ? 'selector ' + r.sel : '"' + unesc(r.text) + '"') + '\nReload the page to start it.\n\n';
     if (!gv(TOKEN_KEY, '')) { alert(head + 'Not pushed to GitHub (no token set - menu: "Set GitHub token").'); return; }
     editRepo(addMutator([r])).then((res) => alert(head + doneMsg(res))).catch((e) => alert(head + 'GitHub push FAILED (rule is still saved locally): ' + ghErr(e)));
   }
@@ -358,6 +363,93 @@
     document.addEventListener('click', onClick, true); document.addEventListener('keydown', onKey, true);
   }
 
+  // ---- 1.7.0: Inspect popup - click a popup (nothing closes or triggers) and get a ready-made rule ----
+  function popupSelector(el) {
+    const cands = [];
+    for (let n = el, d = 0; n && n !== document.body && d < 4; n = n.parentElement, d++) {
+      const tid = n.getAttribute('data-testid'); if (tid && tid.length < 60) cands.push('[data-testid="' + tid.replace(/"/g, '\\"') + '"]');
+      const id = n.id; if (id && id.length < 40 && !/\d{4,}/.test(id) && !/^popupcloser-/.test(id)) cands.push('#' + CSS.escape(id));
+      const al = n.getAttribute('aria-label'); if (al && al.length < 60 && n.getAttribute('role') === 'dialog') cands.push('[role="dialog"][aria-label="' + al.replace(/"/g, '\\"') + '"]');
+      const cls = String(n.getAttribute('class') || '').split(/\s+/).filter(Boolean);
+      const mod = cls.map((c) => c.match(/^(_[A-Za-z]+_)/)).filter(Boolean).map((m) => '[class*="' + m[1] + '"]');
+      const plain = cls.filter((c) => /^[a-z][a-z-]{3,30}$/i.test(c) && !/^(css|sc|jsx|ng|ant)-/i.test(c));
+      mod.forEach((m) => cands.push(n.tagName.toLowerCase() + m));
+      if (plain.length) { cands.push(n.tagName.toLowerCase() + '.' + plain.slice(0, 2).join('.')); cands.push('.' + plain[0]); }
+    }
+    for (const c of cands) { try { const m = document.querySelectorAll(c); if (m.length >= 1 && m.length <= 2 && [...m].some((x) => x === el || x.contains(el) || el.contains(x))) return c; } catch (e) {} }
+    return '';
+  }
+
+  function inspectMode() {
+    const bar = document.createElement('div'); bar.id = 'popupcloser-pick';
+    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#1565c0;color:#fff;font:14px sans-serif;padding:8px;text-align:center';
+    bar.textContent = 'Popup Closer: click the popup anywhere - nothing will close (Esc to cancel)';
+    document.documentElement.appendChild(bar);
+    const EV = ['pointerdown', 'mousedown', 'mouseup', 'pointerup', 'touchstart', 'touchend', 'click'];
+    const stop = (e) => { if (bar.contains(e.target)) return; e.preventDefault(); e.stopImmediatePropagation(); };
+    const done = () => { bar.remove(); EV.forEach((n) => window.removeEventListener(n, onEv, true)); document.removeEventListener('keydown', onKey, true); };
+    const onKey = (e) => { if (e.key === 'Escape') done(); };
+    const onEv = (e) => {
+      if (bar.contains(e.target)) return;
+      stop(e);
+      if (e.type !== 'click') return;
+      const target = e.target;
+      setTimeout(() => { done(); showInspect(target); }, 50);
+    };
+    EV.forEach((n) => window.addEventListener(n, onEv, true));
+    document.addEventListener('keydown', onKey, true);
+  }
+
+  function showInspect(target) {
+    const pop = popupOf(target) || target;
+    const opts = []; // { label, rule }
+    const closeBtn = autoCloseButton(pop);
+    const close = closeBtn ? stableSelector(closeBtn) : '';
+    const seen = new Set();
+    const add = (label, rule) => { const k = JSON.stringify(rule); if (seen.has(k)) return; seen.add(k); opts.push({ label, rule }); };
+    const lines = (pop.innerText || '').split(/\n+/).map((l) => l.replace(/\s+/g, ' ').trim()).filter((l) => l.length >= 3 && l.length <= 90);
+    lines.slice(0, 8).forEach((l) => add('Text: ' + l, { host, name: l.slice(0, 30), text: esc(l), close }));
+    const imgs = [...pop.querySelectorAll('img')].concat(target.tagName === 'IMG' ? [target] : []);
+    imgs.forEach((i) => {
+      const alt = (i.alt || '').trim();
+      if (alt.length >= 4 && !/^(image|icon|logo)$/i.test(alt)) add('Image alt: ' + alt, { host, name: alt.slice(0, 30), text: esc(alt), close });
+      const fn = (i.currentSrc || i.src || '').split('?')[0].split('/').pop() || '';
+      (fn.replace(/\.[a-z0-9]+$/i, '').match(/[A-Za-z]{5,}/g) || []).forEach((w) => add('Image file word: ' + w + '  (' + fn.slice(0, 40) + ')', { host, name: w.slice(0, 30), text: esc(w), close }));
+    });
+    const sel = popupSelector(pop);
+    if (sel) add('Selector (no text needed): ' + sel, { host, name: (lines[0] || sel).slice(0, 30), text: '', close, sel });
+
+    const box = document.createElement('div'); box.id = 'popupcloser-inspect';
+    box.style.cssText = 'position:fixed;top:12px;right:12px;z-index:2147483647;width:440px;max-width:94vw;background:#111;color:#eee;font:12px/1.4 sans-serif;padding:10px;border-radius:8px;box-shadow:0 2px 12px #000;max-height:90vh;overflow:auto';
+    const mk = (tag, css, txt) => { const e = document.createElement(tag); if (css) e.style.cssText = css; if (txt != null) e.textContent = txt; box.appendChild(e); return e; };
+    mk('div', 'font-weight:bold;margin-bottom:6px', 'Popup Closer - inspect (nothing was closed)');
+    mk('div', 'margin-bottom:4px;color:#9cf', 'Close button: ' + (close || (closeBtn ? '(auto-detected, no stable selector)' : 'NOT FOUND - rule may not close it')));
+    if (!opts.length) { mk('div', 'color:#f99;margin:6px 0', 'Found no text, image words or stable selector here. Try clicking a different spot on the popup, or use "Add popup by typing".'); }
+    const sel_ = document.createElement('select'); sel_.style.cssText = 'width:100%;margin:4px 0;font:12px sans-serif';
+    opts.forEach((o, i) => { const op = document.createElement('option'); op.value = i; op.textContent = o.label; sel_.appendChild(op); });
+    if (opts.length) { mk('div', '', 'Match this popup by:'); box.appendChild(sel_); }
+    const ta = mk('textarea', 'width:100%;height:56px;font:11px monospace;box-sizing:border-box;margin-top:4px');
+    ta.readOnly = true;
+    const status = mk('div', 'margin:4px 0;color:#9f9', '');
+    const line = (r) => '{ host: ' + q(nh(r.host)) + ', name: ' + q(r.name || '') + ', text: ' + q(unesc(r.text)) + ', close: ' + q(r.close || '') + (r.sel ? ', sel: ' + q(r.sel) : '') + ' },';
+    const cur = () => (opts[+sel_.value] || {}).rule;
+    const refresh = () => {
+      const r = cur(); if (!r) { ta.value = ''; return; }
+      ta.value = line(r);
+      const hit = findPopup(r);
+      status.textContent = hit ? 'Test: this rule finds the popup and its close button right now.' : 'Test: this rule would NOT close it right now (popup or close button not matched).';
+      status.style.color = hit ? '#9f9' : '#fc6';
+    };
+    sel_.addEventListener('change', refresh);
+    const row = mk('div', 'display:flex;gap:6px;margin-top:6px');
+    const btn = (txt, fn) => { const b = document.createElement('button'); b.textContent = txt; b.style.cssText = 'padding:4px 10px;font:12px sans-serif;cursor:pointer'; b.addEventListener('click', fn); row.appendChild(b); };
+    btn('Add this rule', () => { const r = cur(); if (!r) return; box.remove(); addRule(r); });
+    btn('Copy line', () => { const r = cur(); if (!r) return; try { GM_setClipboard(line(r)); status.textContent = 'Copied.'; } catch (e) { ta.select(); } });
+    btn('Close panel', () => box.remove());
+    document.documentElement.appendChild(box);
+    refresh();
+  }
+
   function addByTyping() {
     const h = prompt('Site (hostname, no www):', host); if (!h) return;
     const phrase = prompt('A phrase that is always in the popup:'); if (!phrase) return;
@@ -367,14 +459,14 @@
   function manage() {
     const all = userRules();
     if (!all.length) { alert('No rules added yet.\n\nBuilt-in: ' + DEFAULT_RULES.map((r) => r.host + ' -> ' + r.text).join('; ')); return; }
-    const n = prompt('Your rules (type a number to DELETE it, blank = cancel):\n' + all.map((r, i) => (i + 1) + '. ' + r.host + ' -> "' + r.text.replace(/\\/g, '') + '"').join('\n'));
+    const n = prompt('Your rules (type a number to DELETE it, blank = cancel):\n' + all.map((r, i) => (i + 1) + '. ' + r.host + ' -> ' + (r.sel ? 'selector ' + r.sel : '"' + r.text.replace(/\\/g, '') + '"')).join('\n'));
     const i = parseInt(n, 10) - 1; if (i >= 0 && i < all.length) { all.splice(i, 1); sv(KEY, all); alert('Deleted. Reload the page.'); }
   }
 
   function copyRules() {
     const all = userRules();
     if (!all.length) { alert('You have no menu-added rules to copy.'); return; }
-    const txt = all.map((r) => '    ' + JSON.stringify({ host: r.host, name: r.name, text: r.text.replace(/\\(.)/g, '$1'), close: r.close || '' }) + ',').join('\n');
+    const txt = all.map((r) => '    ' + JSON.stringify(Object.assign({ host: r.host, name: r.name, text: r.text.replace(/\\(.)/g, '$1'), close: r.close || '' }, r.sel ? { sel: r.sel } : {})) + ',').join('\n');
     try { GM_setClipboard(txt); alert('Copied ' + all.length + ' rule line(s). (Manual fallback - normally "Push my local rules to GitHub" does this for you.)'); }
     catch (e) { prompt('Copy these lines into DEFAULT_RULES:', txt); }
   }
@@ -382,6 +474,7 @@
   try {
     GM_registerMenuCommand('➕ Add popup (click its X)', () => pickMode('x'));
     GM_registerMenuCommand('➕ Add popup (click its text)', () => pickMode('text'));
+    GM_registerMenuCommand('🔎 Inspect popup (click it, nothing closes)', inspectMode);
     GM_registerMenuCommand('➕ Add popup by typing…', addByTyping);
     GM_registerMenuCommand('📋 Show / delete my rules', manage);
     GM_registerMenuCommand('⬆ Push my local rules to GitHub', pushLocal);
