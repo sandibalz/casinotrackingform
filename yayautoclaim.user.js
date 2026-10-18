@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         Yay Casino Auto Claim Now
 // @namespace    https://www.yaycasino.com/
-// @version      1.1.0
+// @version      1.2.0
 // @description  Clicks the Claim Now button on Yay Casino's special-offer / gift popups as soon as they appear. Never touches popups that show a price.
 // @match        https://www.yaycasino.com/*
 // @match        https://yaycasino.com/*
 // @run-at       document-idle
-// @grant        none
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
 // @updateURL    https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/yayautoclaim.user.js
 // @downloadURL  https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/yayautoclaim.user.js
 // ==/UserScript==
@@ -15,7 +17,7 @@
     'use strict';
 
     // ---- badge: collapsed bottom-left pill with a log; click to open/close (same look as Zula Auto Claim). ----
-    const BADGE_NAME = 'Yay Auto Claim', BADGE_VER = '1.1.0';
+    const BADGE_NAME = 'Yay Auto Claim', BADGE_VER = '1.2.0';
     const badgeLines = []; let badgeOpen = false, badgePill = null, badgeBox = null, badgeWarn = 0;
     function badgeRender() {
         try {
@@ -42,7 +44,37 @@
             badgePill.style.color = badgeWarn ? '#ff8a80' : '#9f9';
         } catch (e) {}
     }
+    // v1.2.0: per-owner run log saved in Tampermonkey storage (same scheme as Punt/Chanced: claimLog_<owner>, last 300)
+    const LOG_SITE = 'Yay', isTopFrame = window.top === window.self;
+    function getOwner(forcePrompt) {
+        let owner = GM_getValue('owner', '');
+        if (isTopFrame && (!owner || forcePrompt)) {
+            const a = prompt('Who is this browser for? (Ben, Cindy, Tyler, Jessica)', owner || '');
+            if (a && a.trim()) { owner = a.trim(); GM_setValue('owner', owner); }
+        }
+        return owner || 'Unknown';
+    }
+    function persistLog(text) {
+        try {
+            const key = 'claimLog_' + getOwner();
+            let hist = GM_getValue(key, []);
+            const m = /^RESULT-[A-Z]+/.exec(text);
+            hist.push({ t: new Date().toISOString(), site: LOG_SITE, event: m ? m[0] : 'info', detail: (isTopFrame ? '' : '[frame] ') + text });
+            if (hist.length > 300) hist = hist.slice(-300);
+            GM_setValue(key, hist);
+        } catch (e) {}
+    }
+    if (isTopFrame) {
+        GM_registerMenuCommand('Show full claim log (' + LOG_SITE + ')', () => {
+            const hist = GM_getValue('claimLog_' + getOwner(), []);
+            badgeLines.length = 0;
+            hist.slice(-40).forEach(e => badgeLines.push(e.t.slice(11, 19) + ' ' + e.detail));
+            badgeOpen = true; badgeRender();
+        });
+        GM_registerMenuCommand('Change owner', () => { getOwner(true); });
+    }
     function badgeAdd(text, warn) {
+        persistLog(text);
         badgeLines.push(new Date().toLocaleTimeString() + ' ' + text);
         if (badgeLines.length > 60) badgeLines.shift();
         if (warn || /error|fail|abort|giving up|can't|cannot/i.test(text)) badgeWarn++;
@@ -71,7 +103,7 @@
         const rect = el.getBoundingClientRect();
         const x = rect.left + rect.width / 2;
         const y = rect.top + rect.height / 2;
-        const base = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0, buttons: 1, detail: 1 };
+        const base = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: 1, detail: 1 };
         el.dispatchEvent(new PointerEvent('pointerdown', { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
         el.dispatchEvent(new MouseEvent('mousedown', base));
         el.dispatchEvent(new PointerEvent('pointerup', { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
