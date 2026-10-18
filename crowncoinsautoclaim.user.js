@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CrownCoins Auto Claim Freebie
 // @namespace    https://crowncoinscasino.com/
-// @version      1.1.1
+// @version      1.2.0
 // @description  Closes CrownCoins' random popups (sales/offers) until the free-reward popup with a Claim button appears, then clicks Claim. Never clicks anything showing a price.
 // @match        https://crowncoinscasino.com/*
 // @match        https://*.crowncoinscasino.com/*
@@ -16,7 +16,7 @@
 (function () {
     'use strict';
 
-    const NAME = 'CrownCoins Auto Claim', VER = '1.1.1';
+    const NAME = 'CrownCoins Auto Claim', VER = '1.2.0';
     const CLAIM_RE = /^\s*claim( now)?\s*$/i;
     const PRICE_RE = /\$\s*\d/;
     const CLAIM_COOLDOWN_MS = 3000;
@@ -166,8 +166,25 @@
         }
     }
 
+    // "OOPS! You've already claimed this promo code..." popup with a GOT IT! button: log it and dismiss it.
+    const GOTIT_RE = /^\s*got it!?\s*$/i, ALREADY_RE = /already claimed/i;
+    let lastGotIt = 0;
+    function handleAlreadyClaimed() {
+        if (Date.now() - lastGotIt < 3000) return false;
+        for (const b of document.querySelectorAll('button, [role="button"], a, div[class*="btn" i], div[class*="button" i]')) {
+            if (b.children.length > 2 || !GOTIT_RE.test(b.textContent || '') || b.disabled || !isVisible(b)) continue;
+            if (!ALREADY_RE.test(document.body.innerText || '')) return false;
+            lastGotIt = Date.now(); awaiting = 0; claimed = true;
+            log('RESULT-ALREADY: promo already claimed - clicking GOT IT');
+            try { robustClick(b); } catch (e) { log('got-it click error: ' + e.message); }
+            return true;
+        }
+        return false;
+    }
+
     function scan() {
-        render();   // re-attach the pill if the site's re-render wiped it
+        render();
+        if (handleAlreadyClaimed()) return;   // re-attach the pill if the site's re-render wiped it
         checkResult();
         const now = Date.now();
 
