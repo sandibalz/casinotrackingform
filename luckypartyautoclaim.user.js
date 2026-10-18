@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         LuckyParty Auto Claim Now
 // @namespace    https://luckparty.com/
-// @version      1.3.3
+// @version      1.4.0
 // @description  Closes any popups (including iframe-embedded ones) blocking the way, then finds <div class="button-content">Claim Now</div> on luckparty.com and clicks the Claim Now button. Leaves the Coin Store dialog alone, and leaves any popup with its own unclaimed "Claim Now" button alone too (so it gets claimed, not closed).
 // @match        https://luckparty.com/*
 // @run-at       document-idle
-// @grant        none
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
 // @updateURL    https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/luckypartyautoclaim.user.js
 // @downloadURL  https://raw.githubusercontent.com/sandibalz/casinotrackingform/main/luckypartyautoclaim.user.js
 // ==/UserScript==
@@ -14,7 +16,7 @@
     'use strict';
 
     // ---- badge (10/14/26): collapsed bottom-left pill with a log; click to open/close. Same look as Popup Closer's. ----
-    const BADGE_NAME = 'LuckyParty Auto Claim', BADGE_VER = '1.3.3';
+    const BADGE_NAME = 'LuckyParty Auto Claim', BADGE_VER = '1.4.0';
     const badgeLines = []; let badgeOpen = false, badgePill = null, badgeBox = null, badgeWarn = 0;
     function badgeRender() {
         try {
@@ -41,7 +43,37 @@
             badgePill.style.color = badgeWarn ? '#ff8a80' : '#9f9';
         } catch (e) {}
     }
+    // v1.4.0: per-owner run log saved in Tampermonkey storage (same scheme as Punt/Chanced: claimLog_<owner>, last 300)
+    const LOG_SITE = 'LuckyParty', isTopFrame = window.top === window.self;
+    function getOwner(forcePrompt) {
+        let owner = GM_getValue('owner', '');
+        if (isTopFrame && (!owner || forcePrompt)) {
+            const a = prompt('Who is this browser for? (Ben, Cindy, Tyler, Jessica)', owner || '');
+            if (a && a.trim()) { owner = a.trim(); GM_setValue('owner', owner); }
+        }
+        return owner || 'Unknown';
+    }
+    function persistLog(text) {
+        try {
+            const key = 'claimLog_' + getOwner();
+            let hist = GM_getValue(key, []);
+            const m = /^RESULT-[A-Z]+/.exec(text);
+            hist.push({ t: new Date().toISOString(), site: LOG_SITE, event: m ? m[0] : 'info', detail: (isTopFrame ? '' : '[frame] ') + text });
+            if (hist.length > 300) hist = hist.slice(-300);
+            GM_setValue(key, hist);
+        } catch (e) {}
+    }
+    if (isTopFrame) {
+        GM_registerMenuCommand('Show full claim log (' + LOG_SITE + ')', () => {
+            const hist = GM_getValue('claimLog_' + getOwner(), []);
+            badgeLines.length = 0;
+            hist.slice(-40).forEach(e => badgeLines.push(e.t.slice(11, 19) + ' ' + e.detail));
+            badgeOpen = true; badgeRender();
+        });
+        GM_registerMenuCommand('Change owner', () => { getOwner(true); });
+    }
     function badgeAdd(text, warn) {
+        persistLog(text);
         badgeLines.push(new Date().toLocaleTimeString() + ' ' + text);
         if (badgeLines.length > 60) badgeLines.shift();
         if (warn || /error|fail|abort|giving up|can't|cannot/i.test(text)) badgeWarn++;
