@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Facebook Giveaway Link Tracker
 // @namespace    http://tampermonkey.net/
-// @version      2.1.0
+// @version      2.1.1
 // @description  Floating popup on Facebook to log a giveaway code/link + site + date straight into the "Extra Codes" tab of the Casino SC Tracking sheet, via the same Apps Script Web App the "Giveaway Link" claim button uses. Owner is the same 4-owner identity used everywhere else (Ben/Cindy/Tyler/Jessica), asked once per browser and saved locally. v2.0.0: was previously a standalone POST to a Google Form into its own "Giveaway Links" tab (Owner/Link/Date only, no Site) — that tab was a dead end, disconnected from the "Extra Codes" pool the claim button actually reads from. Rebuilt to add a required Site field and submit straight to the Giveaway Link Rotation Backend's addCode action instead, so this form is now the real intake path for "Extra Codes". v2.1.0: the form is no longer a centered modal overlay — the bottom-right button is now a small chip that toggles the form open/closed as a panel anchored just above it.
 // @author       Ben
 // @run-at       document-idle
@@ -151,7 +151,7 @@
     const container = document.createElement('div');
     const shadow = container.attachShadow({ mode: 'open' });
     Object.assign(container.style, {
-      position: 'fixed', bottom: '56px', right: '10px',
+      position: 'fixed', bottom: '34px', right: '4px',
       zIndex: '2147483647', width: '320px', maxWidth: 'calc(100vw - 20px)'
     });
 
@@ -255,18 +255,21 @@
   function createTriggerButton() {
     const buttonContainer = document.createElement('div');
     Object.assign(buttonContainer.style, {
-      position: 'fixed', bottom: '10px', right: '10px', zIndex: '2147483647', display: 'flex', gap: '5px'
+      position: 'fixed', bottom: '4px', right: '4px', zIndex: '2147483647', display: 'flex', gap: '3px',
+      alignItems: 'center', opacity: '0.55', transition: 'opacity .15s'
     });
+    buttonContainer.onmouseenter = () => { buttonContainer.style.opacity = '1'; closeXButton.style.display = 'block'; };
+    buttonContainer.onmouseleave = () => { buttonContainer.style.opacity = '0.55'; closeXButton.style.display = 'none'; };
     const triggerButton = document.createElement('button');
-    triggerButton.textContent = '🎁 Giveaway';
+    triggerButton.textContent = '🎁'; triggerButton.title = 'Log giveaway link (Shift+Alt+G)';
     Object.assign(triggerButton.style, {
-      padding: '6px 12px', background: '#1877F2', color: '#fff', border: 'none',
-      borderRadius: '999px', boxShadow: '0 2px 6px rgba(0,0,0,0.3)', cursor: 'pointer', fontFamily: 'Arial, Helvetica, sans-serif', fontSize: '13px'
+      width: '24px', height: '24px', padding: '0', background: '#1877F2', color: '#fff', border: 'none',
+      borderRadius: '50%', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', cursor: 'pointer', fontFamily: 'Arial, Helvetica, sans-serif', fontSize: '12px', lineHeight: '24px'
     });
     triggerButton.onclick = createForm;
     const closeXButton = document.createElement('button');
     closeXButton.textContent = 'X';
-    Object.assign(closeXButton.style, { padding: '6px 9px', background: '#f44336', color: '#fff', border: 'none', borderRadius: '999px', cursor: 'pointer' });
+    Object.assign(closeXButton.style, { display: 'none', width: '20px', height: '20px', padding: '0', background: '#f44336', color: '#fff', border: 'none', borderRadius: '50%', cursor: 'pointer', fontSize: '11px', lineHeight: '20px' });
     buttonContainer.appendChild(triggerButton); buttonContainer.appendChild(closeXButton);
     document.body.appendChild(buttonContainer);
     const stopKeepAlive = keepElementAlive(buttonContainer);
