@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Facebook Giveaway Link Tracker
 // @namespace    http://tampermonkey.net/
-// @version      2.0.0
-// @description  Floating popup on Facebook to log a giveaway code/link + site + date straight into the "Extra Codes" tab of the Casino SC Tracking sheet, via the same Apps Script Web App the "Giveaway Link" claim button uses. Owner is the same 4-owner identity used everywhere else (Ben/Cindy/Tyler/Jessica), asked once per browser and saved locally. v2.0.0: was previously a standalone POST to a Google Form into its own "Giveaway Links" tab (Owner/Link/Date only, no Site) — that tab was a dead end, disconnected from the "Extra Codes" pool the claim button actually reads from. Rebuilt to add a required Site field and submit straight to the Giveaway Link Rotation Backend's addCode action instead, so this form is now the real intake path for "Extra Codes".
+// @version      2.1.0
+// @description  Floating popup on Facebook to log a giveaway code/link + site + date straight into the "Extra Codes" tab of the Casino SC Tracking sheet, via the same Apps Script Web App the "Giveaway Link" claim button uses. Owner is the same 4-owner identity used everywhere else (Ben/Cindy/Tyler/Jessica), asked once per browser and saved locally. v2.0.0: was previously a standalone POST to a Google Form into its own "Giveaway Links" tab (Owner/Link/Date only, no Site) — that tab was a dead end, disconnected from the "Extra Codes" pool the claim button actually reads from. Rebuilt to add a required Site field and submit straight to the Giveaway Link Rotation Backend's addCode action instead, so this form is now the real intake path for "Extra Codes". v2.1.0: the form is no longer a centered modal overlay — the bottom-right button is now a small chip that toggles the form open/closed as a panel anchored just above it.
 // @author       Ben
 // @run-at       document-idle
 // @match        https://www.facebook.com/*
@@ -145,12 +145,14 @@
   }
 
   // Form creation (Shadow DOM, minimal CSS — same styling approach as trackingform.user.js)
+  let closeCurrentForm = null; // set while the form panel is open; chip/hotkey toggle it
   function createForm() {
+    if (closeCurrentForm) { closeCurrentForm(); return; }
     const container = document.createElement('div');
     const shadow = container.attachShadow({ mode: 'open' });
     Object.assign(container.style, {
-      position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-      zIndex: '2147483647', maxWidth: '380px'
+      position: 'fixed', bottom: '56px', right: '10px',
+      zIndex: '2147483647', width: '320px', maxWidth: 'calc(100vw - 20px)'
     });
 
     const style = document.createElement('style');
@@ -211,6 +213,13 @@
     formContainer.appendChild(form); shadow.appendChild(formContainer);
     document.body.appendChild(container);
     const stopKeepAlive = keepElementAlive(container);
+    const closeForm = () => {
+      stopKeepAlive();
+      document.removeEventListener('keydown', onKeyDown, true);
+      if (container.isConnected) container.remove();
+      closeCurrentForm = null;
+    };
+    closeCurrentForm = closeForm;
 
     form.onsubmit = (e) => {
       e.preventDefault();
@@ -226,23 +235,18 @@
       // Close immediately, same as trackingform.user.js — don't make the user wait on the
       // network round trip. Submission retries in the background; a failure still surfaces
       // via alert() even though the popup has already closed.
-      stopKeepAlive();
-      document.body.removeChild(container);
+      closeForm();
       submitToTracker({ owner: ownerVal, site: siteVal, link: linkVal, date: dateVal }, {
         onFinalFailure: (reason) => {
           alert(`Error logging giveaway link after retrying: ${reason}.\nSite: ${siteVal}\nLink: ${linkVal}`);
         }
       });
     };
-    closeButton.onclick = () => { stopKeepAlive(); document.body.removeChild(container); };
+    closeButton.onclick = closeForm;
 
     // Escape closes the popup without submitting
     const onKeyDown = (e) => {
-      if (e.key === 'Escape') {
-        stopKeepAlive();
-        if (container.isConnected) document.body.removeChild(container);
-        document.removeEventListener('keydown', onKeyDown, true);
-      }
+      if (e.key === 'Escape') closeForm();
     };
     document.addEventListener('keydown', onKeyDown, true);
   }
@@ -254,15 +258,15 @@
       position: 'fixed', bottom: '10px', right: '10px', zIndex: '2147483647', display: 'flex', gap: '5px'
     });
     const triggerButton = document.createElement('button');
-    triggerButton.textContent = '🎁 Log Giveaway';
+    triggerButton.textContent = '🎁 Giveaway';
     Object.assign(triggerButton.style, {
-      padding: '10px', background: '#1877F2', color: '#fff', border: 'none',
-      borderRadius: '4px', cursor: 'pointer', fontFamily: 'Arial, Helvetica, sans-serif', fontSize: '13px'
+      padding: '6px 12px', background: '#1877F2', color: '#fff', border: 'none',
+      borderRadius: '999px', boxShadow: '0 2px 6px rgba(0,0,0,0.3)', cursor: 'pointer', fontFamily: 'Arial, Helvetica, sans-serif', fontSize: '13px'
     });
     triggerButton.onclick = createForm;
     const closeXButton = document.createElement('button');
     closeXButton.textContent = 'X';
-    Object.assign(closeXButton.style, { padding: '5px 8px', background: '#f44336', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' });
+    Object.assign(closeXButton.style, { padding: '6px 9px', background: '#f44336', color: '#fff', border: 'none', borderRadius: '999px', cursor: 'pointer' });
     buttonContainer.appendChild(triggerButton); buttonContainer.appendChild(closeXButton);
     document.body.appendChild(buttonContainer);
     const stopKeepAlive = keepElementAlive(buttonContainer);
