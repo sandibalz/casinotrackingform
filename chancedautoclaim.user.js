@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chanced Auto Claim Promo Code
 // @namespace    https://chanced.com/
-// @version      1.2.2
+// @version      1.2.3
 // @description  When the Get Coins dialog's Promotion Codes tab is open with a code already filled in (e.g. from the autologin URL), clicks Submit once per code. v1.2.0: logs each run (found / clicked / site response) per owner in Tampermonkey storage and shows a live log overlay.
 // @match        https://chanced.com/*
 // @run-at       document-idle
@@ -14,6 +14,47 @@
 
 (function () {
     'use strict';
+
+    // 10/26/26 badge dock: ONE shared, collapsed, open-shadow-root dock for every on-page chip/pill/log (Collector-App,
+    // AutoLogin, Tampermonkey). Whoever runs first creates it; everyone else appends a section to #bd-sections (use the
+    // CSS `order` property: lower = nearer the bottom). Collapsed = a 9px edge tab only; page querySelector/text scans
+    // can't see inside it, and nothing outside the tab/open panel takes clicks. Keep this block identical in every script
+    // that uses the dock (a copy lives in background.js pageAppendCollectorLog).
+    function getDock() {
+      let host = document.getElementById('__badge-dock');
+      if (host && host.shadowRoot && host.shadowRoot.getElementById('bd-sections')) return host.shadowRoot;
+      if (host) host.remove();
+      host = document.createElement('div');
+      host.id = '__badge-dock';
+      host.style.cssText = 'position:fixed;left:0;bottom:37px;width:0;height:0;z-index:2147483647;pointer-events:none;';
+      const sr = host.attachShadow({ mode: 'open' });
+      const mk = (tag, id) => { const e = document.createElement(tag); if (id) e.id = id; return e; };
+      const st = mk('style');
+      st.textContent = ':host{all:initial}' +
+        '#bd-tab{position:fixed;left:0;bottom:37px;width:9px;height:44px;background:#37474f;opacity:.55;border-radius:0 6px 6px 0;cursor:pointer;pointer-events:auto}' +
+        '#bd-tab:hover{opacity:1}:host([data-alert]) #bd-tab{background:#c62828;opacity:.9}' +
+        '#bd-panel{position:fixed;left:12px;bottom:37px;display:none;align-items:flex-end;gap:6px;pointer-events:auto}' +
+        ':host([data-open]) #bd-panel{display:flex}' +
+        '#bd-sections{display:flex;flex-direction:column-reverse;align-items:flex-start;gap:3px}' +
+        '#bd-popups{display:flex;align-items:flex-end}';
+      const tab = mk('div', 'bd-tab'); tab.title = 'Badges';
+      const panel = mk('div', 'bd-panel');
+      const sections = mk('div', 'bd-sections'), popups = mk('div', 'bd-popups');
+      panel.appendChild(sections); panel.appendChild(popups);
+      sr.appendChild(st); sr.appendChild(tab); sr.appendChild(panel);
+      let pinned = false, t = null;
+      const open = () => { host.setAttribute('data-open', ''); host.removeAttribute('data-alert'); };
+      const close = () => { pinned = false; host.removeAttribute('data-open'); };
+      tab.addEventListener('mouseenter', () => { clearTimeout(t); open(); });
+      tab.addEventListener('click', () => { if (pinned) close(); else { pinned = true; open(); } });
+      host.addEventListener('mouseenter', () => clearTimeout(t));
+      host.addEventListener('mouseleave', () => { if (pinned) return; clearTimeout(t); t = setTimeout(() => { if (!popups.childElementCount) close(); }, 800); });
+      host.addEventListener('dock-collapse', close);
+      (document.body || document.documentElement).appendChild(host);
+      return sr;
+    }
+    function dockFind(id) { const h = document.getElementById('__badge-dock'); return h && h.shadowRoot ? h.shadowRoot.getElementById(id) : null; }
+
 
     // Codes we've already hit Submit for, so a re-render/re-scan doesn't
     // click Submit twice for the same code. Keyed by the code text itself
@@ -60,15 +101,9 @@
     function ensureOverlay() {
         if (overlayEl || !document.body) return;
         // v1.2.2: collapsed pill (like Popup Closer's) in a shared bottom-left stack; click to open the log, click again to collapse.
-        let stack = document.getElementById('tm-badge-stack');
-        if (!stack) {
-            stack = document.createElement('div');
-            stack.id = 'tm-badge-stack';
-            stack.style.cssText = 'position:fixed;left:12px;bottom:168px;z-index:2147483646;display:flex;flex-direction:column-reverse;align-items:flex-start;gap:2px;pointer-events:none;';
-            document.body.appendChild(stack);
-        }
+        const stack = getDock().getElementById('bd-sections'); // 10/26/26: shared badge dock (was #tm-badge-stack)
         overlayEl = document.createElement('div');
-        overlayEl.style.cssText = 'display:flex;flex-direction:column;align-items:flex-start;gap:2px;pointer-events:none;';
+        overlayEl.style.cssText = 'order:40;display:flex;flex-direction:column;align-items:flex-start;gap:2px;pointer-events:none;';
         const box = document.createElement('div');
         box.style.cssText = 'display:none;width:340px;max-height:220px;background:#111;color:#eee;font:12px/1.4 monospace;border:1px solid #555;border-radius:6px;box-shadow:0 2px 10px #000a;flex-direction:column;pointer-events:auto;';
         const bar = document.createElement('div');
