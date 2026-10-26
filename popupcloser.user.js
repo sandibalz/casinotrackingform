@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Popup Closer (per-site list)
 // @namespace    https://github.com/sandibalz/casinotrackingform
-// @version      1.7.9
+// @version      1.8.0
 // @description  Closes pop-ups you teach it (e.g. the "Add this web app to your device" bar) on the sites you add. Does nothing on a site that has no rule. Add rules from the Tampermonkey menu.
 // @match        *://*/*
 // @noframes
@@ -18,6 +18,47 @@
 
 (function () {
   'use strict';
+
+    // 10/26/26 badge dock: ONE shared, collapsed, open-shadow-root dock for every on-page chip/pill/log (Collector-App,
+    // AutoLogin, Tampermonkey). Whoever runs first creates it; everyone else appends a section to #bd-sections (use the
+    // CSS `order` property: lower = nearer the bottom). Collapsed = a 9px edge tab only; page querySelector/text scans
+    // can't see inside it, and nothing outside the tab/open panel takes clicks. Keep this block identical in every script
+    // that uses the dock (a copy lives in background.js pageAppendCollectorLog).
+    function getDock() {
+      let host = document.getElementById('__badge-dock');
+      if (host && host.shadowRoot && host.shadowRoot.getElementById('bd-sections')) return host.shadowRoot;
+      if (host) host.remove();
+      host = document.createElement('div');
+      host.id = '__badge-dock';
+      host.style.cssText = 'position:fixed;left:0;bottom:37px;width:0;height:0;z-index:2147483647;pointer-events:none;';
+      const sr = host.attachShadow({ mode: 'open' });
+      const mk = (tag, id) => { const e = document.createElement(tag); if (id) e.id = id; return e; };
+      const st = mk('style');
+      st.textContent = ':host{all:initial}' +
+        '#bd-tab{position:fixed;left:0;bottom:37px;width:9px;height:44px;background:#37474f;opacity:.55;border-radius:0 6px 6px 0;cursor:pointer;pointer-events:auto}' +
+        '#bd-tab:hover{opacity:1}:host([data-alert]) #bd-tab{background:#c62828;opacity:.9}' +
+        '#bd-panel{position:fixed;left:12px;bottom:37px;display:none;align-items:flex-end;gap:6px;pointer-events:auto}' +
+        ':host([data-open]) #bd-panel{display:flex}' +
+        '#bd-sections{display:flex;flex-direction:column-reverse;align-items:flex-start;gap:3px}' +
+        '#bd-popups{display:flex;align-items:flex-end}';
+      const tab = mk('div', 'bd-tab'); tab.title = 'Badges';
+      const panel = mk('div', 'bd-panel');
+      const sections = mk('div', 'bd-sections'), popups = mk('div', 'bd-popups');
+      panel.appendChild(sections); panel.appendChild(popups);
+      sr.appendChild(st); sr.appendChild(tab); sr.appendChild(panel);
+      let pinned = false, t = null;
+      const open = () => { host.setAttribute('data-open', ''); host.removeAttribute('data-alert'); };
+      const close = () => { pinned = false; host.removeAttribute('data-open'); };
+      tab.addEventListener('mouseenter', () => { clearTimeout(t); open(); });
+      tab.addEventListener('click', () => { if (pinned) close(); else { pinned = true; open(); } });
+      host.addEventListener('mouseenter', () => clearTimeout(t));
+      host.addEventListener('mouseleave', () => { if (pinned) return; clearTimeout(t); t = setTimeout(() => { if (!popups.childElementCount) close(); }, 800); });
+      host.addEventListener('dock-collapse', close);
+      (document.body || document.documentElement).appendChild(host);
+      return sr;
+    }
+    function dockFind(id) { const h = document.getElementById('__badge-dock'); return h && h.shadowRoot ? h.shadowRoot.getElementById(id) : null; }
+
 
   // ---- Built-in rules (shared: these come with the GitHub copy, so every owner gets them) ----
   // Rules added from the Tampermonkey menu are saved only in THAT browser. To share one with everyone, use the menu item
@@ -267,12 +308,12 @@
   function logClosed(rule) {
     try {
       closedLog.push({ name: rule.name || rule.text, t: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) });
-      let box = document.getElementById('popupcloser-log');
+      let box = dockFind('popupcloser-log');
       if (!box) {
         box = document.createElement('div'); box.id = 'popupcloser-log';
-        box.style.cssText = 'position:fixed;left:12px;bottom:84px;z-index:2147483646;background:#111;color:#9f9;font:11px/1.4 sans-serif;padding:4px 8px;border-radius:6px;opacity:.85;cursor:pointer;max-width:260px';
+        box.style.cssText = 'order:45;background:#111;color:#9f9;font:11px/1.4 sans-serif;padding:4px 8px;border-radius:6px;opacity:.85;cursor:pointer;max-width:260px';
         box.addEventListener('click', () => { box._open = !box._open; render(); });
-        (document.body || document.documentElement).appendChild(box);
+        getDock().getElementById('bd-sections').appendChild(box); // 10/26/26: shared badge dock
       }
       const render = () => { box.innerHTML = ''; const h = document.createElement('div'); h.textContent = '✓ Popup Closer v' + ((typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '?') + ': ' + closedLog.length + ' closed' + (box._open ? '' : ' ▸'); box.appendChild(h); if (box._open) closedLog.forEach((e) => { const d = document.createElement('div'); d.textContent = e.t + '  ' + e.name; box.appendChild(d); }); };
       render();
