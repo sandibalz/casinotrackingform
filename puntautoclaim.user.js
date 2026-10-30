@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Punt Auto Claim Promo Code
 // @namespace    https://punt.com/
-// @version      1.2.4
+// @version      1.2.5
 // @description  When the Get Coins dialog's Promotion Codes tab is open with a code already filled in (e.g. from the autologin URL), clicks Submit once per code. v1.2.0: logs each run (found / clicked / site response) per owner in Tampermonkey storage and shows a live log overlay.
 // @match        https://punt.com/*
 // @run-at       document-idle
@@ -213,7 +213,7 @@
     }
 
     // 10/28/26: wait a few seconds after load before claiming (location services were still initializing)
-    const CLAIM_START_DELAY_MS = 5000;
+    const CLAIM_START_DELAY_MS = 10000;
     const claimReadyAt = Date.now() + CLAIM_START_DELAY_MS;
 
     function scan() {
