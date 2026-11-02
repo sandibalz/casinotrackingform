@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.10.6
+// @version      1.10.7
 // @description  On RealPrize and LoneStar Casino: clicks daily/grand prize COLLECT and any button whose text says collect / claim / free spins (incl. image-based Claim Now popups, CLAIM PRIZE, SPIN & WIN), and closes popups that show a price (e.g. 4.99, 19.99)
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -96,6 +96,7 @@
 //           text matching started clicking random things. On realprize.com ONLY (NEW_RP) the script now: never closes price popups,
 //           skips the image-popup path and the CLAIM PRIZE / SPIN & WIN launch scan, and clicks only an element whose whole text is
 //           Claim/Collect (+Now/Reward/Bonus/Prize) INSIDE a popup. Everything else is just logged (SEEN). LoneStar unchanged.
+// v1.10.7 – LoneStar moved to the same new frontend as realprize.com: strict mode (NEW_RP) now applies on both sites (no price-popup closing, no image-popup path, no launch scan; clicks only an exact Claim/Collect label inside a popup).
 // v1.10.5 – the on-page log is now a collapsed bottom-left pill (like Popup Closer's, in a shared #tm-badge-stack); click it to open the log, click again to collapse. Copy kept; the x is gone.
 // v1.10.2 – SEEN log: records the text of every popup that appears (once per page load), even if the script does nothing with it.
 // v1.10.1 – fixed top/bottom bars and pointer-events:none layers no longer count as popups (nav Free Spins button was still clicked).
@@ -199,7 +200,7 @@
     // ── v1.10.0: per-owner run log (Tampermonkey storage) + live overlay (same idea as Punt/Chanced) ──
     const IS_TOP     = window.top === window.self;
     const SITE       = /lonestar/i.test(location.hostname) ? 'LoneStar' : 'RealPrize';
-    const NEW_RP     = SITE === 'RealPrize';   // v1.10.3: strict mode on the new realprize.com frontend
+    const NEW_RP     = true;   // v1.10.3: strict mode on the new realprize.com frontend; v1.10.7: LoneStar moved to the same platform, so strict mode applies to both
     const RESULT_RE  = /error|invalid|already|expired|not valid|failed|success|claimed|congrat|added|received|reward|collected/i;
     const ERROR_RE   = /error|invalid|already|expired|not valid|failed/i;
     const NOISY_LOG_RE = /^(Launch scan:|Launch-window button scan)/;   // console only, not stored
@@ -983,5 +984,5 @@
     // ── Polling fallback ───────────────────────────────────────────────────────
     setInterval(scanAndClaim, POLL_INTERVAL_MS);
     armLaunchScan('page load');
-    log(`v1.10.3 loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), and launch buttons…`);
+    log(`v1.10.7 loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), and launch buttons…`);
 })();
