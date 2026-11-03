@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealPrize / LoneStar Casino – Auto Claim Popup
 // @namespace    SweepsEdge
-// @version      1.10.7
+// @version      1.10.8
 // @description  On RealPrize and LoneStar Casino: clicks daily/grand prize COLLECT and any button whose text says collect / claim / free spins (incl. image-based Claim Now popups, CLAIM PRIZE, SPIN & WIN), and closes popups that show a price (e.g. 4.99, 19.99)
 // @author       SweepsEdge
 // @match        *://*.realprize.com/*
@@ -96,6 +96,7 @@
 //           text matching started clicking random things. On realprize.com ONLY (NEW_RP) the script now: never closes price popups,
 //           skips the image-popup path and the CLAIM PRIZE / SPIN & WIN launch scan, and clicks only an element whose whole text is
 //           Claim/Collect (+Now/Reward/Bonus/Prize) INSIDE a popup. Everything else is just logged (SEEN). LoneStar unchanged.
+// v1.10.8 – (Tyler, 11/3/26) a Collect click that did nothing (e.g. at page load) used up the 2-click-per-button cap, so the LoneStar Daily Prize COLLECT was never retried. Now the click is given back if the button is still there 3.5 s later (max 8 retries per button).
 // v1.10.7 – LoneStar moved to the same new frontend as realprize.com: strict mode (NEW_RP) now applies on both sites (no price-popup closing, no image-popup path, no launch scan; clicks only an exact Claim/Collect label inside a popup).
 // v1.10.5 – the on-page log is now a collapsed bottom-left pill (like Popup Closer's, in a shared #tm-badge-stack); click it to open the log, click again to collapse. Copy kept; the x is gone.
 // v1.10.2 – SEEN log: records the text of every popup that appears (once per page load), even if the script does nothing with it.
@@ -419,6 +420,7 @@
     }
 
     const nodeClicks = new WeakMap();
+    const retryCounts = new WeakMap();
     const textClicks = new Map();
     function labelOf(el) {
         return cleanText(el) || (el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title'))) || '';
@@ -881,6 +883,19 @@
             log(`Broad Collect/Claim Now button found → clicking "${cleanText(best)}"`);
             noteClick(best);
             realClick(best);
+            // v1.10.8: a click that did nothing (popup still animating / not yet live) must not use up the per-node click cap.
+            // If the same button is still there and enabled 3.5 s later, give the click back so the next scan retries (max 8 retries per node).
+            const lbl = labelOf(best).toLowerCase();
+            setTimeout(() => {
+                try {
+                    if (best.isConnected && isVisibleLoose(best) && !best.disabled && /^(claim|collect)\b/i.test(cleanText(best)) && (retryCounts.get(best) || 0) < 8) {
+                        retryCounts.set(best, (retryCounts.get(best) || 0) + 1);
+                        nodeClicks.set(best, 0);
+                        textClicks.set(lbl, Math.max(0, (textClicks.get(lbl) || 1) - 1));
+                        log('Button still present after click - will retry (' + retryCounts.get(best) + '/8)');
+                    }
+                } catch (_) {}
+            }, 3500);
         }
     }
 
@@ -984,5 +999,5 @@
     // ── Polling fallback ───────────────────────────────────────────────────────
     setInterval(scanAndClaim, POLL_INTERVAL_MS);
     armLaunchScan('page load');
-    log(`v1.10.7 loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), and launch buttons…`);
+    log(`v1.10.8 loaded on ${location.hostname} – watching for popups, daily collect, grand prize, Claim Now (incl. image popups), and launch buttons…`);
 })();
